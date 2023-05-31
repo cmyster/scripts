@@ -1,0 +1,1045 @@
+#!/bin/bash
+# 
+# Ceilometer Sanity Test 
+# Last updated 2014-01-08 for RDO Test Day
+# Last tested on Icehouse version of  OpenStack
+# Author: kwhitney@redhat..com
+
+##########################################################
+#                  W.A.R.N.I.N.G
+##########################################################
+#
+#  --------------DESTRUCTIVE TEST------------------------
+#  THIS TEST WILL DELETE METERS, ALARMS, INSTANCES, IMAGES
+#  --------------DESTRUCTIVE TEST------------------------
+#
+#
+##########################################################
+
+# Assumptions:
+# 1) Traditional, fresh installation via packstack (one node)
+# 2) Use Neutron networking
+# 3) All ceilometer services running (api, compute, collector, central, agent-notification, alarm-evaluator, alarm-notifier)
+# 4) Initial state is no images imported, no alarms, only start-up initial meters
+# 5) Initial state has one admin user named 'admin'(will create additional user named 'tester01')
+# 6) 'wget' is installed (for acquiring an image)
+
+# See setup for configuration changes (to make testing faster)
+
+#Globals
+
+ERRORCOUNT=0
+ONEMINUTE=60
+POLLPERIOD=$ONEMINUTE
+WAITPOLL=$((POLLPERIOD+10))
+THISTEST="Not started"
+UNIQUE_TAG=''
+CEILOMETER_COMPONENT_COUNT=7
+
+
+unique_tag() {
+UNIQUE_TAG=`date +"_%Y%m%d%H%M%S"`
+}
+
+error() {
+    ERRORCOUNT=$((ERRORCOUNT+1))
+}
+
+log_line() {
+TS=`date +"%Y%m%d-%H:%M:%S"`
+LINETYPE=$1
+DATA=$2
+    echo "$TS $LINETYPE $DATA"
+}
+
+log_error() {
+DATA=$1
+    error
+    log_line "ERROR " "${DATA}"
+}
+
+log_info() {
+DATA=$1
+    log_line "INFO  " "${DATA}"
+}
+
+log_pass() {
+DATA=$1
+    log_line "PASS  " "${DATA}"
+}
+
+test_start() {
+    banner "START TEST: $1 "
+}
+
+test_end() {
+    log_pass "$1 PASSED"
+    banner "END TEST  : $1 "
+}
+
+important() {
+    log_info "# $1   "
+}
+
+banner() {
+    log_info "#########################################################"
+    log_info "# $1        # "
+    log_info "#########################################################"
+}
+
+
+error_exit() {
+    banner "Test FAILED"
+    exit $1
+}
+assertion_start() {
+    important "START Assertion: ${1}"
+    important
+}
+
+assertion_end() {
+    important
+    important "END   Assertion: ${1}"
+}
+
+
+restore_conf_file() {
+    log_info "Restoring modified $1.conf file"
+    if [ -f original.$1 ]; then
+	mv /etc/$1/original.$1.conf /etc/$1/$1.conf
+        chown $1:$1 /etc/$1/$1.conf
+    fi
+}
+
+restore() {
+    banner "CLEANUP Start"
+    log_info "Restoring modified files"
+
+    restore_conf_file ceilometer
+    restore_conf_file keystone
+    restore_conf_file nova
+
+    if [ -f /etc/ceilometer/original.pipeline.yaml ]; then
+	mv /etc/ceilometer/original.pipeline.yaml /etc/ceilometer/pipeline.yaml
+        chown ceilometer:ceilometer /etc/ceilometer/*
+      
+    fi
+    service openstack-ceilometer-compute restart
+
+    log_info "Deleting any remaining alarms"
+    ALARMS=`ceilometer alarm-list | grep meter_for | awk {'print $2}'`
+    for a in `echo $ALARMS`
+    do
+        ceilometer alarm-delete -a $a
+    done
+    log_info "Delete test-tenant whether or not it exists"
+    keystone tenant-delete test-tenant
+    log_info "Delete test-user (tester01) whether or not it exists"
+    keystone user-delete tester01
+    log_info "Delete test-role (tester) whether or not it exists"
+    keystone role-delete tester
+
+
+    log_info "Delete test instance (test-instance) whether or not it exists"
+    nova delete test_instance 2>/dev/null
+
+    log_info "Delete glance images"
+    for image in `glance index | grep cirros | awk '{print $1}'`
+    do
+        glance image-delete $image
+    done
+
+# Delete dummy net/subbnet
+    log_info "Delete dummy network/subnet"
+    neutron subnet-delete dummy-subnet
+    neutron net-delete    dummy-net
+    banner "CLEANUP End"
+}
+
+# Setup
+# 1)  Modify /etc/ceilometer/pipeline.yaml
+#  DO THIS MANUALLY BEFORE TESTING.  The tester must affirm that
+#  the contents of pipeline.yaml reasonably matches the intent of this
+#  script.
+#        1. change interval: 600 to interval: 60
+#        2. add  file:///tmp/meter_pipeline.log as a publisher for the meter_pipeline
+#        3. add -file:///tmp/cpu_pipeline.log as a publisher for the cpu_pipeline
+#        4. add  udp://localhost as a publisher for the cpu_pipeline
+# 2) Modify /etc/ceilometer/ceilometer.conf
+#        1. [database]  time_to_live = 3600
+# 3) Modify /etc/glance/glance-api.conf
+#        1. make sure “notifier_strategy is uncommented and set to qpid
+#        2. verify other qpid_* parameters are reasonable (should not have to change)
+# 4) Modify /etc/keystone/keystone.conf
+#        1. [token] expiration = 3600
+# 5) Modify /etc/nova/nova.conf
+#        1. notification_driver=ceilometer.compute.nova_notifier
+#        2. notification_driver=nova.openstack.common.notifier.rpc_notifier
+#        3. notify_on_state_change=True
+# 6) Tester is presumed to source the keystonerc_admin file generated by packstack
+# 7) Tester is presumed to have created a test user in a test domain
+
+# keystone bootstrap --user-name tester01 --pass 123456 --role-name tester --tenant-name test-tenant
+
+
+
+setup() {
+    banner "SETUP start"
+
+#  Tester is presumed to source the keystonerc_admin file generated by packstack
+     source $HOME/keystonerc_admin
+
+# Create additional user and tenant tester01/test-tenant
+     keystone bootstrap --user-name tester01 --pass 123456 --role-name tester --tenant-name test-tenant
+
+# Create dummy net/subbnet
+    neutron net-create    --tenant-id test-tenant dummy-net
+    neutron subnet-create --tenant-id test-tenant dummy-net 10.5.5.0/24 --gateway 10.5.5.1 --name dummy-subnet
+
+#   Modify /etc/ceilometer/pipeline.yaml
+	# Save original
+        if [ ! -f /etc/ceilometer/original.pipeline.yaml ]; then
+	    cp /etc/ceilometer/pipeline.yaml /etc/ceilometer/original.pipeline.yaml
+            chown ceilometer:ceilometer /etc/ceilometer/*
+        fi
+
+        # Re-create pipeline.yaml: Use this version:
+cat >/etc/ceilometer/pipeline.yaml <<EOINPUT
+---
+-
+    name: meter_pipeline
+    interval: 10
+    meters:
+        - "*"
+    transformers:
+    publishers:
+        - rpc://
+        - file:///tmp/meter_pipeline.log
+-
+    name: cpu_pipeline
+    interval: 10
+    meters:
+        - "cpu"
+    transformers:
+        - name: "rate_of_change"
+          parameters:
+              target:
+                  name: "cpu_util"
+                  unit: "%"
+                  type: "gauge"
+                  scale: "100.0 / (10**9 * (resource_metadata.cpu_number or 1))"
+    publishers:
+        - rpc://
+
+EOINPUT
+
+     chgrp ceilometer /etc/ceilometer/pipeline.yaml
+
+# Save original
+
+# 2) Modify /etc/ceilometer/ceilometer.conf
+     log_info "Modify /etc/ceilometer/ceilometer.conf"
+#        1. [database]  time_to_live = 3600
+     if [ ! -f /etc/ceilometer/original.ceilometer.conf ]; then
+         cp /etc/ceilometer/ceilometer.conf /etc/ceilometer/original.ceilometer.conf
+     fi
+     openstack-config --set /etc/ceilometer/ceilometer.conf database time_to_live 3600
+     chgrp ceilometer /etc/ceilometer/ceilometer.conf
+
+     service openstack-ceilometer-compute restart
+	
+# 3) Modify /etc/glance/glance-api.conf
+     log_info "Modify /etc/glance/glance-api.conf"
+#        1. make sure “notifier_strategy is uncommented and set to qpid
+#        2. verify other qpid_* parameters are reasonable (should not have to change)
+	cp /etc/glance/glance-api.conf /etc/glance/original.glance-api.conf
+        chown glance:glance /etc/glance/glance-api.conf
+        # NOTHING should *need* changing here for RH as these are the defaults
+
+# 4) Modify /etc/keystone/keystone.conf
+    log_info "Modify /etc/keystone/keystone.conf"
+#        1. [token] expiration = 3600
+
+     if [ ! -f /etc/keystone/original.keystone.conf ]; then
+         cp /etc/keystone/keystone.conf /etc/keystone/original.keystone.conf
+     fi
+     openstack-config --set /etc/keystone/keystone.conf token expiration 3600
+     chgrp keystone /etc/keystone/keystone.conf
+
+# 5) Modify /etc/nova/nova.conf
+    log_info "Modify /etc/nova/nova.conf"
+#        1. notification_driver=ceilometer.compute.nova_notifier
+#        2. notification_driver=nova.openstack.common.notifier.rpc_notifier
+#        3. notify_on_state_change=True
+     
+      # NOTE: (1) and (2) are the defaults for RH
+     if [ ! -f /etc/nova/original.nova.conf ]; then
+         cp /etc/nova/nova.conf /etc/nova/original.nova.conf
+     fi
+     openstack-config --set /etc/nova/nova.conf DEFAULT notify_on_state_change True
+     chgrp nova /etc/nova/nova.conf
+
+    banner "SETUP end"
+
+}
+
+# Test scenarios
+# 
+
+# Installation 
+# 
+# Assert: packstack+puppet-ceilometer install correctly in single-node mode, with all services present on the single node
+# 
+test_installation() {
+   THISTEST="test_installation"
+   test_start "${THISTEST}"
+   ASSERTION="packstack+puppet-ceilometer install correctly in single-node mode, with all services present on the single node"
+    assertion_start "${ASSERTION}"
+
+# Steps
+#  1. Verify the services are installed:
+#      a) chkconfig | grep ceilometer | wc -l 
+#      b) should return “7”
+    yum info openstack-packstack | grep Repo | grep havana
+    IS_HAVANA=$?
+    AGENT_NOTIFICATION=notification
+
+# NOTE: between HAVANA and ICEHOUSE, an additional ceilometer service was added: "ceilomter-agent-notification".
+#       The test below accomodates either a havana or an icehouse (or later) configuration
+    if [ "$IS_HAVANA" == "0" ]; then
+        CEILOMETER_COMPONENT_COUNT=6
+        AGENT_NOTIFICATION=""
+    fi
+
+   log_info "Get count of regsitered ceilometer services"
+#   COUNT=`chkconfig | grep ceilometer | wc -l `
+    COUNT=$(openstack-status | grep ceilometer | grep active |wc -l)
+
+   if [ ! $COUNT -eq $CEILOMETER_COMPONENT_COUNT ]; then
+        log_error "Ceilometer services are not fully installed: expected $CEILOMETER_COMPONENT_COUNT found $COUNT"
+        restore
+        error_exit 1
+   fi
+
+#  2. The following code should show all services in the 'is running...' state
+
+    log_info "Verify each service is in running state"
+    for serv in alarm-evaluator alarm-notifier api central collector compute $AGENT_NOTIFICATION
+    do
+        service openstack-ceilometer-$serv status | grep "running" >/dev/null
+	if [ ! $? -eq 0 ]; then
+            log_error "Ceilometer service openstack-ceilometer-$serv not running"
+            restore
+            error_exit 1
+	fi
+        log_info "    openstack-ceilometer-$serv is running"
+    done
+
+#     NOTE: The text table format adds 4 lines to the output- subract 4
+      log_info "Get list of initial meters for this config: should be 6 associated with SWIFT"
+      COUNT=`ceilometer meter-list |grep -v meter_for_ | wc -l`
+      COUNT=$((COUNT-4))
+      if [ ! $COUNT -gte 6 ]; then
+            log_error "Wrong number of meters on freshly installed system.  Expected at least 6, got $COUNT"
+            restore
+            error_exit 1
+     fi
+
+    assertion_end "${ASSERTION}"
+
+# Assert: the ceilometer service user is created in keystone and has been assigned the expected admin role
+# Steps:
+# 1. Command “keystone user-list | grep ceilometer | grep True |wc -l” should return a “1” (one)
+    ASSERTION="the ceilometer service user is created in keystone and has been assigned the expected admin role"
+    assertion_start "${ASSERTION}"
+	
+   log_info "Verify ceilometer service user is created" 
+   COUNT=`keystone user-list | grep ceilometer | grep True |wc -l` 
+   if [ ! $COUNT -eq 1 ]; then
+       log_error "Wrong number of ceilometer users on freshly installed system.  Expected 1, got $COUNT"
+       restore
+       error_exit 1
+   fi
+   assertion_end "${ASSERTION}"
+# 
+# Assert: the ceilometer endpoint is created in the keystone service  catalog
+    ASSERTION="the ceilometer endpoint is created in the keystone service  catalog"
+    assertion_start "${ASSERTION}"
+# Steps:
+# 1. Command “keystone service-list | grep ceilometer | grep metering | grep “Metering “ |wc -l” should return a “1” (one)
+    log_info "Verify ceilometer service is listed exactly once"
+      COUNT=`keystone service-list | grep ceilometer | grep metering | grep "Metering " |wc -l` 
+      if [ ! $COUNT -eq 1 ]; then
+            log_error "Wrong number of ceilometer services on freshly installed system.  Expected 1, got $COUNT"
+            restore
+            error_exit 1
+     fi
+   assertion_end "${ASSERTION}"
+   test_end "${THISTEST}"
+}
+
+# 
+# Correctness and Timeliness of Meters
+# 
+test_statistics_of_meters() {
+    THISTEST="test statistics of meters"
+    test_start "${THISTEST}"
+
+# Assert: A meter can be created, that meter has correct number of samples and that the min, max and average statistics show correctly.
+    ASSERTION="A meter can be created, that meter has correct number of samples and that the min, max and average statistics show correctly."
+    assertion_start "${ASSERTION}"
+# Steps:
+#     1. Create a meter and establish a minimum value of '0' (zero)
+#     2. Add a sample volume which will be the maximum of 1000000000000000 (1x10^15)
+#     3. Use ceilometer meter-list to:
+#         1. verify that meter exists
+#         2. verify exactly one meter is listed
+
+      unique_tag
+      METERNAME=meter_for_test$UNIQUE_TAG
+      RESOURCENAME=res_$METERNAME
+      MIN=1
+      MAX=1000000000000000
+      # Verify meter does not exist (test re-runs can leave meter in place)
+      log_info "Verify test meter does not exist (test re-runs can leave meter in place)"
+      ceilometer meter-list | grep $METERNAME
+      if [ ! $? -eq 1 ]; then
+            log_error "Test meter exists from previous run."
+            restore
+            error_exit 1
+     fi
+
+     log_info "Manufacture a test meter ($METERNAME) and a submit a known min and max data sample volume"
+      ceilometer sample-create -m $METERNAME --meter-type cumulative --meter-unit something --sample-volume $MIN -r $RESOURCENAME
+      ceilometer sample-create -m $METERNAME --meter-type cumulative --meter-unit something --sample-volume $MAX -r $RESOURCENAME
+
+      log_info "Verify meter was created"
+      ceilometer meter-list | grep $METERNAME
+      if [ ! $? -eq 0 ]; then
+            log_error "Test \"$METERNAME\" meter could not be created"
+            restore
+            error_exit 1
+     fi
+
+#     4. Use ceilometer statistics -m <meter name> to verify correct min, max and average
+      log_info "Use ceilometer statistics -m <meter name> to verify correct min, max and average"
+      YEAR=`date +"%Y"`
+echo
+STAT_OUT=$(ceilometer statistics -m $METERNAME | grep $YEAR- | tr -d " ")
+echo
+      MAX=$(echo $STAT_OUT | awk -F\| '{print $5}')
+      MIN=$(echo $STAT_OUT | awk -F\| '{print $6}')
+      AVG=$(echo $STAT_OUT | awk -F\| '{print $7}')
+      SUM=$(echo $STAT_OUT | awk -F\| '{print $8}')
+      COUNT=$(echo $STAT_OUT | awk -F\| '{print $9}')
+
+#     5. Use ceilometer sample-list -m <meter name> to show the correct number of samples (2)
+#     6. ceilometer statistics should show something like this:
+#     7. 0      | 2013-12-03T23:50:58.486000 | 2013-12-03T23:50:58.486000 | 2     | 0.0 | 1e+15 | 1e+15 | 5e+14 | 16.462   | 2013-12-03T23:50:58.486000 | 2013-12-03T23:51:14.948000 |
+      log_info "Verify exactly two samples created for test meter"
+      if [ ! $COUNT -eq 2 ]; then
+            log_error "Test meter \"$METERNAME\"  statistic COUNT not correct.  Expected 2 got $COUNT"
+            restore
+            error_exit 1
+     fi
+      log_info "Verify MIN statistic matches MIN datum supplied"
+      if [ "$MIN" != "1.0" ]; then
+            log_error "Test meter \"$METERNAME\"  statistic MIN not correct.  Expected 1.0 got $MIN"
+            restore
+            error_exit 1
+     fi
+      log_info "Verify MAX statistic matches MAX datum supplied"
+      if [ "$MAX" != "1e+15" ]; then
+            log_error "Test meter \"$METERNAME\"  statistic MAX not correct.  Expected 1e+15 got $MAX"
+            restore
+            error_exit 1
+     fi
+      log_info "Verify SUM statistic matches SUM of data supplied"
+      if [ "$SUM" != "1e+15" ]; then
+            log_error "Test meter \"$METERNAME\"  statistic SUM not correct.  Expected 1e+15 got $SUM"
+            restore
+            error_exit 1
+     fi
+      log_info "Verify AVG statistic matches AVG of data supplied"
+      if [ "$AVG" != "5e+14" ]; then
+            log_error "Test meter \"$METERNAME\"  statistic AVG not correct.  Expected 5e+14 got $AVG"
+            restore
+            error_exit 1
+     fi
+
+    assertion_end "${ASSERTION}"
+    test_end "${THISTEST}"
+
+}
+
+test_image_meters() {
+# 
+# 
+    THISTEST=test_image_meters
+    test_start "${THISTEST}"
+
+# Assert: Image load triggers appropriate meters
+
+# Steps:
+# 1. Download the image file and install using glance
+# 2. Verify 'image' meters are image, image,download, image,serve, image.size, image.update, image.upload (ceilometer meter-list | grep image | awk '{print $2}' | sort -u)
+
+    log_info "Downloading trivial image file cirros-0.3.0"
+    TARGET=cirros-0.3.0-x86_64-uec.tar.gz
+    # Don't re-download if already present (test has run before)
+    if [ ! -f $TARGET ]; then
+        wget http://launchpad.net/cirros/trunk/0.3.0/+download/$TARGET
+    fi
+
+    log_info "Untar image file"
+    tar zxvf cirros-0.3.0-x86_64-uec.tar.gz
+
+    log_info "Use GLANCE to create image"
+    glance add name=cirros-aki is_public=true container_format=aki disk_format=aki < cirros-0.3.0-x86_64-vmlinuz
+    glance add name=cirros-ari is_public=true container_format=ari disk_format=ari < cirros-0.3.0-x86_64-initrd
+    glance add name=cirros-ami is_public=true container_format=ami disk_format=ami \
+     "kernel_id=$(glance index | awk '/cirros-aki/ {print $1}')" \
+     "ramdisk_id=$(glance index | awk '/cirros-ari/ {print $1}')" < cirros-0.3.0-x86_64-blank.img
+    log_info "Done setup of image file"
+
+# 
+# Assert: Instance creation triggers instance meters
+    ASSERTION="Instance creation triggers instance meters"
+    assertion_start "${ASSERTION}"
+
+# Steps:
+# 1. Use nova to create and boot an instance “test01” using “tiny” flavor
+# 2. Verify 'instance' meters are instance, instance:m1.tiny
+# (ceilometer meter-list | grep instance | awk '{print $2}' | sort -u)
+
+        IMAGE_ID=$(glance index | awk '/cirros-ami/ {print $1}')
+        log_info "Boot test image $IMAGE_ID"
+        nova boot --image $IMAGE_ID --flavor 1 test_instance
+        log_info "Wait up to 5 minutes for test image to boot"
+	COUNT=0
+        while [ $COUNT -lt 5 ]
+	do
+            log_info "    Wait: $((COUNT+1)) minutes"
+	    nova show test_instance | grep  OS-EXT-STS:vm_state | grep active >/dev/null
+            if [ $? -eq 0 ]; then
+		COUNT=5
+                log_info "Test image booted"
+            else
+	        sleep $ONEMINUTE
+                COUNT=$((COUNT+1))
+            fi
+       done
+       log_info "Test image has booted"
+
+       INSTANCE_RID=`nova list | grep test_instance | awk '{print $2}'`
+       # Look for instance, instance:m1.tiny
+       log_info "Verify new meters for this image (m1.tiny)"
+       METERLIST=`ceilometer meter-list | awk '{print $2}' | sort -u`
+	for pattern in "instance " instance:m1.tiny
+	do
+	    echo $METERLIST | grep "$pattern" >/dev/null
+            if [ ! $? -eq 0 ]; then
+                log_error "Meter list should include \"$pattern\" but does not."
+		restore
+		error_exit 1
+            fi
+        done	
+       
+    assertion_end "${ASSERTION}"
+    test_end "${THISTEST}"
+}
+
+# 
+test_instance_meters() {
+    THISTEST=test_instance_meters
+    test_start  "${THISTEST}"
+
+    ASSERTION="Instance creation triggers network meters"
+    assertion_start "${ASSERTION}"
+
+# Assert: Instance creation triggers network meters
+# Steps:
+# 1. Use nova to create and boot an instance “test01” using “tiny” flavor
+# 1. or use previous, already created instance
+# 2. Wait at least 3 minutes from instance startup for running instance to trigger network meter activity
+# 3. Verify 'network' meters are network, network.create
+# (ceilometer meter-list | grep network  | awk '{print $2}' | sort -u)
+
+	for pattern in network network.create
+	do
+            METERLIST=`ceilometer meter-list | awk '{print $2}' | sort -u`
+	    echo $METERLIST | grep "$pattern" >/dev/null
+            if [ ! $? -eq 0 ]; then
+                log_error "Meter list should include \"$pattern\" but does not."
+		restore
+		error_exit 1
+            fi
+            log_info "Meter $pattern found"
+        done	
+    assertion_end "${ASSERTION}"
+
+# 
+# 
+# Assert: Instance creation triggers disk meters
+    ASSERTION="Instance creation triggers disk meters"
+    assertion_start "${ASSERTION}"
+# Steps:
+# 1. Use nova to create and boot an instance “test01” using “tiny” flavor
+# 1. or use previous, already created instance
+# 2. Wait at least 3 minutes from instance startup for running instance to trigger disk meter activity
+# 3. Verify 'disk' meters are disk.read.bytes, disk.read.requests, disk.write.bytes, disk.write.requests
+# (ceilometer meter-list | grep disk  | awk '{print $2}' | sort -u)
+
+	for pattern in disk.read.bytes disk.read.requests disk.write.bytes disk.write.requests
+	do
+            METERLIST=`ceilometer meter-list | awk '{print $2}' | sort -u`
+	    echo $METERLIST | grep "$pattern" >/dev/null
+            if [ ! $? -eq 0 ]; then
+                log_error "Meter list should include \"$pattern\" but does not."
+		restore
+		error_exit 1
+            fi
+            log_info "Meter $pattern found"
+        done	
+
+    assertion_end "${ASSERTION}"
+# 
+# Assert: Instance creation triggers cpu meters
+    ASSERTION="Instance creation triggers cpu meters"
+    assertion_start "${ASSERTION}"
+# Steps:
+# 1. Use nova to create and boot an instance “test01” using “tiny” flavor
+# 1. or use previous, already created instance
+# 2. Wait at least 6 minutes from instance startup for running instance to trigger cpu meter activity
+# 3. Verify 'cpu' meters are cpu, cpu_util
+# (ceilometer meter-list | grep disk  | awk '{print $2}' | sort -u)
+
+	for pattern in cpu cpu_util
+	do
+            METERLIST=`ceilometer meter-list | awk '{print $2}' | sort -u`
+	    echo $METERLIST | grep "$pattern" >/dev/null
+            if [ ! $? -eq 0 ]; then
+                log_error "Meter list should include \"$pattern\" but does not."
+		restore
+		error_exit 1
+            fi
+            log_info "Meter $pattern found"
+        done	
+
+    assertion_end "${ASSERTION}"
+# 
+# Assert: Instance tear-down stops accumulation of samples
+    ASSERTION="Instance tear-down stops accumulation of samples"
+    assertion_start "${ASSERTION}"
+# Steps:
+# 1. Count the samples for the cpu and cpu_util meters (ceilometer sample-list | wc -l)
+# 2. Wait ~2 minutes and verify that the numbers are increasing by <<number (s)>> 
+# 3. Use nova to terminate test instance
+#     1. Verify instance is gone
+# 4. Count samples for cpu and cpu_utils meters
+# 5. Wait ~2 minutes and verify the numbers are no longer increasing
+# 
+	log_info "First, verify that new samples are being created"
+	log_info "before you can verify that they stop!"
+        
+        INSTANCE_RID=`nova list | grep test_instance | awk '{print $2}'`
+        WAITTIME=$WAITPOLL
+	CPU_START_COUNT=`ceilometer sample-list -m cpu -q "resource_id=${INSTANCE_RID}" | wc -l`
+	CPU_UTIL_START_COUNT=`ceilometer sample-list -m cpu -q "resource_id=${INSTANCE_RID}" | wc -l`
+	log_info "Sleeping $WAITPOLL seconds to wait for new samples"
+	sleep $WAITTIME
+	CPU_END_COUNT=`ceilometer sample-list -m cpu -q "resource_id=${INSTANCE_RID}" | wc -l`
+	CPU_UTIL_END_COUNT=`ceilometer sample-list -m cpu -q "resource_id=${INSTANCE_RID}" | wc -l`
+	# Shut down instance
+        nova delete test_instance
+
+ 	# We set the poll period to 60 seconds (from 600) in 
+        # our test setup
+	log_info "Checking for new samples"
+	if [ ! $CPU_END_COUNT -gt $CPU_START_COUNT ]; then
+	    log_error "CPU meter got no new samples in the last $WAITTIME seconds"
+	    restore
+	    error_exit 1
+	fi
+	if [ ! $CPU_UTIL_END_COUNT -gt $CPU_UTIL_START_COUNT ]; then
+	    log_error "CPU_UTIL meter got no new samples in the last $WAITTIME seconds"
+            restore
+	    error_exit 1
+	fi
+        log_info "New samples found as expected"
+
+	# Instance is shutdown, let's verify no change in counters
+	log_info "Shut down instance and verify no change in sample data counters"
+	CPU_START_COUNT=`ceilometer sample-list -m cpu -q "resource_id=${INSTANCE_RID}" | wc -l`
+	CPU_UTIL_START_COUNT=`ceilometer sample-list -m cpu -q "resource_id=${INSTANCE_RID}" | wc -l`
+	log_info "Sleeping $WAITPOLL seconds to verify no new samples acquired"
+	sleep $WAITTIME
+	CPU_END_COUNT=`ceilometer sample-list -m cpu -q "resource_id=${INSTANCE_RID}" | wc -l`
+	CPU_UTIL_END_COUNT=`ceilometer sample-list -m cpu -q "resource_id=${INSTANCE_RID}" | wc -l`
+	log_info "Checking for new samples"
+	if [ ! $CPU_END_COUNT -eq $CPU_START_COUNT ]; then
+	    log_error "CPU meter got new samples when the instance was deleted"
+	    restore
+	    error_exit 1
+	fi
+        log_info "New samples for CPU meter not found as expected"
+	if [ ! $CPU_UTIL_END_COUNT -eq $CPU_UTIL_START_COUNT ]; then
+	    log_error "CPU_UTIL meter got new samples when the instance was deleted"
+	    restore
+	    error_exit 1
+	fi
+        log_info "New samples for CPU_UTIL meter not found as expected"
+	
+    assertion_end "${ASSERTION}"
+    test_end  "${THISTEST}"
+}
+
+test_alarms_states() {
+    THISTEST=test_alarms_states
+    test_start  "${THISTEST}"
+# 
+# Alarms
+# 
+# Setup:
+# 1. Create dummy meter
+# 2. Create alarm on dummy meter using average and “gt”
+# 3. Assume default eval period of 60s
+
+      #There should be no alarms present
+      log_info "There should be no alarms present"
+      COUNT=`ceilometer alarm-list |  egrep -v "+|Alarm condition" | wc -l`
+      if [ ! $COUNT -eq 0 ]; then
+	    log_error "Found unexpected alarms set"
+	    restore
+	    error_exit 1
+      fi
+      log_info "There are no alarms present"
+
+      ASSERTION="Create 2 alarms: verify 2 alarms created"
+      assertion_start "$ASSERTION"
+
+      #NOTE NOTE NOTE
+      # The following line builds a time-stamp unique string to allow creating
+      # unique meter names for each run of this script
+      unique_tag
+      METERNAME=meter_for_alarm_test$UNIQUE_TAG
+      RESOURCENAME=res_$METERNAME
+      METERTYPE=cumulative
+      
+      # Create alarm for meter getting to 2
+       log_info "Create alarm which triggers on value exactly 2"
+       ceilometer alarm-threshold-create     \
+           --name alarm_on_exactly_2                   \
+           --description 'Alarm on level of 2' \
+           --meter-name $METERNAME             \
+           --threshold 2.0                     \
+           --comparison-operator eq            \
+           --statistic avg                     \
+           --period 30                         \
+           --evaluation-periods 1              \
+           --alarm-action 'http://localhost/alarm_test_token/' \
+           --query resource_id=$RESOURCENAME
+
+
+      # Create alarm for meter exceeding 2
+       log_info "Create alarm which triggers on value greater than 2"
+       ceilometer alarm-threshold-create       \
+           --name alarm_on_gt_2                   \
+           --description 'Alarm on value gt 2' \
+           --meter-name $METERNAME             \
+           --threshold 2.0                     \
+           --comparison-operator gt            \
+           --statistic avg                     \
+           --period 30                         \
+           --evaluation-periods 1              \
+           --alarm-action 'http://localhost/alarm_test_token/' \
+           --query resource_id=$RESOURCENAME
+
+      #There should be 2 alarms present
+      log_info "Verify that there should be 2 alarms present"
+      COUNT=`ceilometer alarm-list | grep -v '^$' | wc -l`
+      #Remove the table formatting line count
+      COUNT=$((COUNT-4))
+      if [ ! $COUNT -eq 2 ]; then
+	    log_error "Alarm creation failed.  Expected 2 alarms: found $COUNT"
+	    restore
+	    error_exit 1
+      fi
+      log_info "There are 2 alarms present"
+
+      assertion_end "$ASSERTION"
+      ASSERTION="New alarms start in insufficient data state"
+      assertion_start "$ASSERTION"
+
+      # Both alarms should show "insufficient data"
+      log_info "Verify both alarms should show \"insufficient data\""
+      COUNT=`ceilometer alarm-list | grep insufficient | wc -l`
+      if [ ! $COUNT -eq 2 ]; then
+	    log_error "Freshly created alarm in wrong state" 
+	    restore
+	    error_exit 1
+      fi
+      log_info "Both alarms show \"insufficient data\""
+      assertion_end "$ASSERTION"
+  
+      ASSERTION="provide a data sample of exactly 2 triggers the \"exactly_2\" alarm"
+      assertion_start "$ASSERTION"
+
+      # Trigger alarm "alarm_on_exactly_2"
+      # Create the test meter by submitting one sample
+      log_info "Create the test meter ($METERNAME) by submitting one sample"
+      log_info "Trigger alarm alarm_on_exactly_2"
+      ceilometer sample-create -m $METERNAME --meter-type $METERTYPE --meter-unit S --sample-volume 2.0 -r $RESOURCENAME
+
+      # Wait for trigger poll
+      log_info "Wait for trigger poll ($WAITPOLL seconds)"
+      for i in 1 2  3 4 5 6 7 8 9
+      do
+          STATE=`ceilometer alarm-list | grep alarm_on_exactly_2 | awk '{print $6}'`
+          log_info "    Alarm state is:  \"$STATE\""
+          if [ "$STATE" == "alarm" ]; then
+              break
+          fi
+          sleep 10
+      done
+             
+      # exactly one alarm should present 'alarm'
+      log_info "Verify that only desired alarm should present 'alarm'"
+      if [ ! "$STATE" == "alarm" ]; then
+	    log_error "Freshly created alarm did not trigger on \"eq\" term.  Expected 'alarm' found $STATE"
+	    restore
+	    error_exit 1
+      fi
+      log_info "Correct alarm went to \"alarm\" state"
+
+      log_info "Waiting for alarms to clear"
+      sleep $WAITPOLL
+      # Both alarms should show "insufficient data"
+      log_info "Both alarms should again show insufficient data"
+      COUNT=`ceilometer alarm-list | grep insufficient | wc -l`
+      if [ ! $COUNT -eq 2 ]; then
+	    log_error "Alarm did not return to insufficient data state after trigger."
+	    restore
+	    error_exit 1
+      fi
+      log_info "Both alarms returned to insufficient data state"
+      assertion_end "$ASSERTION"
+
+      ASSERTION="providing data greater than 2 triggers only the \"greater than 2\" alarm"
+      assertion_start "$ASSERTION"
+
+      # Trigger alarm "alarm_on_gt_2"
+      log_info "Trigger alarm alarm_on_gt_2"
+      ceilometer sample-create -m $METERNAME --meter-type $METERTYPE --meter-unit S --sample-volume 3.0 -r $RESOURCENAME
+
+      # Wait for trigger poll
+      log_info "Wait for trigger poll ($WAITPOLL seconds)"
+      for i in 1 2  3 4 5 6 7 8 9
+      do
+          STATE=`ceilometer alarm-list | grep alarm_on_gt_2 | awk '{print $6}'`
+          log_info "    Alarm state is:  \"$STATE\""
+          if [ "$STATE" == "alarm" ]; then
+              break
+          fi
+          sleep 10
+      done
+
+      # exactly one alarm should present 'alarm'
+      log_info "Only the desired alarm should present 'alarm'"
+      if [ ! "$STATE" == "alarm" ]; then
+            log_error "Freshly created alarm did not trigger on \"gt\" term"
+            restore
+            error_exit 1
+      fi
+      log_info "Only the desired alarm presented 'alarm'"
+
+      log_info "Waiting for alarms to clear"
+      sleep $WAITPOLL
+      # Both alarms should show "insufficient data"
+      COUNT=`ceilometer alarm-list | grep insufficient | wc -l`
+      if [ ! $COUNT -eq 2 ]; then
+            log_error "Alarm did not return to insufficient data state after trigger."
+            restore
+            error_exit 1
+      fi
+      log_info "Alarms cleared to insufficient data state "
+      assertion_end "$ASSERTION"
+      
+
+# 
+# Assert: disabled alarm never presents alarm state
+# Steps:
+# 1. Set alarm state to “disabled”  (--enabled False)
+# 2. Verify alarm in “disabled” state
+# 3. Use ceilometer client to assign data sample which exceeds threshold
+# 4. Wait 2 mins
+# 5. Verify “insufficient data” state
+
+      ASSERTION="disabled alarm never presents alarm state"
+      assertion_start "$ASSERTION"
+
+      ALARM_EQ_2=`ceilometer alarm-list | grep alarm_on_exactly_2 | awk '{print $2}'`
+      ALARM_GT_2=`ceilometer alarm-list | grep alarm_on_gt | awk '{print $2}'`
+
+      # Set alarm_on_gt_2 to disabled
+      log_info  "Set alarm_on_gt_2 to disabled"
+      ceilometer alarm-update -a $ALARM_GT_2 --enabled False
+      
+      # Trigger alarm "alarm_on_gt_2"
+      log_info "Trigger alarm alarm_on_gt_2"
+      ceilometer sample-create -m $METERNAME --meter-type $METERTYPE --meter-unit S --sample-volume 3.0 -r $RESOURCENAME
+
+      # Wait for trigger poll
+      log_info "Wait for trigger poll ($WAITPOLL seconds)"
+      for i in 1 2  3 4 5 6 7 8 9
+      do
+          STATE=`ceilometer alarm-list | grep alarm_on_gt_2 | awk '{print $6}'`
+          log_info "    Alarm state is:  \"$STATE\""
+          if [ "$STATE" == "alarm" ]; then
+              break
+          fi
+          sleep 10
+      done
+
+      # There should be no alarm
+      log_info "Verify that there is no alarm"
+      if [ "$STATE" == "alarm" ]; then
+            log_error "Freshly disabled alarm did still triggered on \"gt\" term"
+            restore
+            error_exit 1
+      fi
+      log_info "No alarm state presented for disabled alarm"
+      assertion_end "$ASSERTION"
+
+# 
+# Assert: Alarm condition initiates alarm action
+# Steps:
+# 1. Count lines in alarm log /var/ceilometer/alarm-notifier.log for 'alarm_test_token'
+# 2. Create alarm condition
+# 3. Verify count of lines in alarm log increases by 1 (one)
+
+      ASSERTION="Alarm condition initiates alarm action"
+      assertion_start "$ASSERTION"
+
+      # Get current count (previous tests will also make entries)
+      log_info "Get current count of lines with 'alarm_test_token' in them (previous tests will also make entries)"
+      STARTCOUNT=`grep alarm_test_token /var/log/ceilometer/alarm-notifier.log | wc -l | awk '{print $1}'`
+
+      # Trigger alarm "alarm_on_exactly_2"
+      
+      log_info "Trigger alarm alarm_on_exactly_2"
+      ceilometer sample-create -m $METERNAME --meter-type $METERTYPE --meter-unit S --sample-volume 2.0 -r $RESOURCENAME
+
+      # Wait for trigger poll
+      log_info "Wait for trigger poll ($WAITPOLL seconds)"
+      for i in 1 2  3 4 5 6 7 8 9
+      do
+          STATE=`ceilometer alarm-list | grep alarm_on_exactly_2 | awk '{print $6}'`
+          log_info "    Alarm state is:  \"$STATE\""
+          if [ "$STATE" == "alarm" ]; then
+              break
+          fi
+          sleep 10
+      done
+
+      # Get second count, after log entry is posted
+      log_info "Get second count, after log entry is (should be) posted"
+      ENDCOUNT=`grep alarm_test_token /var/log/ceilometer/alarm-notifier.log | wc -l | awk '{print $1}'`
+
+      # exactly one entry should be present
+      log_info "exactly one entry should be present"
+      DIFF=$((ENDCOUNT-STARTCOUNT))
+      if [ ! $DIFF -eq 1 ]; then
+            log_error "Freshly created alarm did not trigger alarm-action"
+            restore
+            error_exit 1
+      fi
+      log_info "Alarm action triggered"
+      assertion_end "$ASSERTION"
+      test_end "$THISTEST"
+}
+
+# Main routine
+#
+# The Header for each test explains what it does.  If this test runs successfully, the
+# basic function of the ceilometer component is sanity checked.
+#
+# Below is a summary of the assertions verified in each test.
+#
+# NOTE NOTE NOTE: The test sequence is designed to minimize time because waiting for
+#                 things to happen is the nature of alarms and there is a lot of waiting done
+#                 in this test.  Run all the tests in sequence, on a fresh install.
+#
+# test_installation
+#    ASSERTION
+#        packstack+puppet-ceilometer install correctly in single-node mode, 
+#         with all services present on the single node
+#     ASSERTION
+#         the ceilometer service user is created in keystone and has been
+#         assigned the expected admin role"
+#     ASSERTION
+#          the ceilometer endpoint is created in the keystone service 
+#          catalog"
+#
+# test_statistics_of_meters
+#     ASSERTION
+#           A meter can be created, that meter has correct number of
+#           samples and that the min, max and average statistics show
+#           correctly."
+#
+# test_image_meters
+#      ASSERTION
+#            Instance creation triggers instance meters
+#
+# test_instance_meters
+#     ASSERTION
+#            Instance creation triggers network meters
+#     ASSERTION
+#            Instance creation triggers disk meters"
+#     ASSERTION
+#            Instance creation triggers cpu meters
+#     ASSERTION
+#            Instance tear-down stops accumulation of samples
+#
+# test_alarms_state
+#       ASSERTION
+#            Create 2 alarms: verify 2 alarms created
+#       ASSERTION
+#            New alarms start in insufficient data state
+#       ASSERTION
+#            Provide a data sample of exactly 2 triggers the "exactly_2"
+#            alarm
+#       ASSERTION
+#            Providing data greater than 2 triggers only the "greater
+#            than 2" alarm"
+#       ASSERTION
+#            Disabled alarm never presents alarm state
+#       ASSERTION
+#            Alarm condition initiates alarm action
+
+
+main() {
+    banner "Start ceilometer sanity test"
+    setup
+    test_installation
+    test_statistics_of_meters
+#------------ test_image_meters creates an instance used by test_instance_meters
+    test_image_meters
+    test_instance_meters
+#------------ test_image_meters creates an instance used by test_instance_meters
+    test_alarms_states
+    restore
+    banner "End: Ceilometer sanity test PASSED"
+}
+
+# Alternate place for regession tests (bug verification scripts/snippets)
+regressions() {
+    echo "Not used yet: How did you get here?"
+}
+
+# Execution starts here - everything else is a function or a definition
+# The script will have exit()'d early on error
+
+main
+exit 0
+

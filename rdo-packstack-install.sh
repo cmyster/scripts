@@ -1,0 +1,178 @@
+#!/bin/bash
+
+### Don't forget to add the wanted repositories ###
+
+# WARNING: This scripts comes as is and its working for me on my setup.
+#          This scripts is expecting a clean system.
+#          If something breakes, don't blame me.
+
+# Direct download URL for the RDO RPM
+RPM_URL="https://repos.fedorapeople.org/repos/openstack/openstack-juno/rdo-release-juno-1.noarch.rpm"
+
+# Setting to true here will delete all the repo files and create a new 
+# file with information given here.
+DEL_REPOS=true
+
+# Setting this to true will reboot the system if yum update finds that
+# a new kernel was installed
+REBOOT=true
+ 
+# HOSTs configuration for the answer file. packstack generates
+# configuration for a single machine from which it is being run, so if
+# you are installing on a single machine, this list should be empty.
+# this is an example of using this to install COMPUTE_HOSTS on 2 IPs:
+# hosts_config=(
+#               COMPUTE_HOSTS" "10.1.2.2,10.1.2.3"
+#              )
+# General changes: should fit something that sed can understand later:
+# general_changes=( 
+#                  "PASSWORD" "123456"
+#                 )
+# will be run later like so:
+# sed -i 's/PASSWORD=.*/PASSWORD=123456/g' $ANS_FILE
+
+general_changes=(
+                 "_PW" "123456"
+                 "PASSWORD" "123456"
+                 "INSTALL" "y"
+                 "NAGIOS_INSTALL" "n"
+                 "ML2_TYPE_DRIVERS" "vlan"
+                 "PROVISION_DEMO" "n"
+                 "EPEL" "y"
+                 "NEUTRON_ML2_VLAN_RANGES" "physnet1:182:182"
+                 "BRIDGE_MAPPINGS" "physnet1:br-ex"
+                 "TENANT_NETWORK_TYPES" "vlan"
+                 "CINDER_VOLUMES_CREATE" "n"
+                )
+
+# Function to modify a file by a set of key=value rules
+conf_changer ()
+{
+    file="${1}"
+    shift
+    changes=("${@}")
+    for index in $(seq 0 2 $(( ${#changes[@]} - 1 )))
+    do
+        param=${changes[$index]}
+        value=${changes[$(( $index + 1 ))]}
+        sed -i 's/'$param=.*'/'$param=$value'/g' $file
+    done
+}
+
+# Exit if not root
+if [[ "$(whoami)" != "root" ]]
+then
+    echo "please run this script as root."
+    exit 1
+fi
+
+# Removing repos, yum cache and any rdo-release package if available
+echo "cleaning up"
+yum remove -y epel-release &> /dev/null
+yum remove -y rdo-release &> /dev/null
+if $DEL_REPOS
+then 
+    rm -rf /etc/yum.repos.d/*
+fi
+rm -rf /var/cache/yum/*
+
+
+# I'm using internal mirrors so I'm creating a file for my repos
+echo "
+[rhel7-server-rpms]
+name=Packages for RHEL 7 - $basearch
+baseurl=http://download.eng.bos.redhat.com/rel-eng/repos/rhel-7.0/x86_64/
+gpgcheck=0
+failovermethod=priority
+enabled=1
+
+[rhel-7-server-update-rpms]
+name=Update Packages for Enterprise Linux 7 - $basearch
+baseurl=http://download.eng.bos.redhat.com/rel-eng/repos/rhel-7.0-z/x86_64/
+gpgcheck=0
+failovermethod=priority
+enabled=1
+
+[rhel-7-server-optional-rpms]
+name=Optional Packages for Enterprise Linux 7 - $basearch
+baseurl=http://download.devel.redhat.com/released/RHEL-7/7.0/Server-optional/x86_64/os/
+gpgcheck=0
+failovermethod=priority
+enabled=1
+
+[rhel-7-server-extras-rpms]
+name=Optional Packages for Enterprise Linux 7 - $basearch
+baseurl=http://download.devel.redhat.com/rel-eng/EXTRAS-7.0-RHEL-7-20140610.0/compose/Server/x86_64/os/
+gpgcheck=0
+failovermethod=priority
+enabled=1
+" > /etc/yum.repos.d/needed.repo
+
+# Installing rdo-replease, this should add the rdo repo file
+echo "installing rdo-release"
+yum install -y $RPM_URL &> /dev/null
+if [ $? -ne 0 ]
+then
+    echo "yum was unable to install rdo-release"
+    exit 1
+else
+    echo "done"
+fi
+
+# Running yum update at this point. If there is a new kernel, reboot.
+echo "running yum update, this might take a while"
+UPDATE_LOG=/tmp/pack_install_update.log
+rm -rf $UPDATE_LOG
+yum update -y &> $UPDATE_LOG
+if [ $? -ne 0 ]                                                         
+then                                                                    
+    echo "yum was unable to run update"
+    exit 1                                                              
+else                                                                    
+    echo "done"                                                         
+fi
+
+echo "checking if kernel was updated"
+grep 'kernel-[0-9]\.' $UPDATE_LOG &> /dev/null
+if [ $? -eq 0 ]
+then
+    echo "new kernel installed, restarting now."
+    echo "please re-run $0 after reboot." 
+    if $REBOOT
+    then
+        reboot
+        exit 0
+    fi
+else
+    echo "no new kernel. not restarting"
+fi
+
+# Installing openstack-packstack
+echo "checking if packstack is installed"
+rpm -qa | grep packstack &> /dev/null
+if [ $? -ne 0 ]
+then
+    echo "packstack is not installed. installing now"
+    yum install -y openstack-packstack &> /dev/null
+fi
+
+# Domains here are all called domainx.foo.bar. I like to use a shorter
+# form of it for the answer file. Answer file is generated by packstack
+ANS_FILE=$(hostname | cut -d . -f 1).answer
+echo "checking if the answer file $ANS_FILE is present"
+if [ ! -f $ANS_FILE ]
+then
+    echo "creating a new answer file $ANS_FILE"
+    packstack --gen-answer-file=$ANS_FILE
+fi
+
+# Going over the lists of changes to be performed on the answer file
+conf_changer "$ANS_FILE" "${hosts_config[@]}"
+conf_changer "$ANS_FILE" "${general_changes[@]}"
+
+echo "running packstack"
+exit 0
+packstack --answer-file=$ANS_FILE
+
+rm -rf $UPDATE_LOG
+echo "DONE"

@@ -1,0 +1,14 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>FINDPILLAR Pillar bugs</title>
+</head>
+<body>
+<p>This is an automatic report that shows FINDPILLAR bugs which are missing something.
+<br/>A total of FINDBUGNUM FINDBUGS have something missing:</p>
+<table border="1">
+<tbody>
+<tr>
+<td style="width: 500px;"><strong>Summary</strong></td>
+<td style="text-align: center; width: 80px;"><strong>ID</strong></td>

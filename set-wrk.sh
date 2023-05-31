@@ -1,0 +1,1 @@
+setxkbmap -v workman-p

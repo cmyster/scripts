@@ -1,0 +1,209 @@
+# Fixed strings are set in this area. If you want to change something, there
+# shouldn't be any need to change anything other than whats in this section.
+
+# Note that we're using python-bugzilla's ability to run a query from URL...
+
+# Explanation about the repeating parameters within this file:
+# $_NAME  - Name that is used in the final report.
+# $_BZ_Q  - The bugzilla query used to generate the report.
+# $_CARES - The fields that a certain project or pillar cares about.
+#           The numbers are:
+#           1 - Existence of Telco in the bug's internal whiteboard.
+#           2 - Existence of Triaged in the bug's keywords.
+#           3 - Does the bug have UpcomingSprint keyword.
+#           4 - Does the bug have severity.
+#           5 - Does the bug have priority.
+#           6 - Does the bug have a target release version.
+#
+# $_TO    - To: mail addresses, divided by commas.
+# $_FROM  - From: mail address.
+
+# Help message
+HELP="\nUsage:   $0 [a single subject] [a single option]\n"
+HELP+="Subject:  [MetalManagement|Management|CNF|Customer]\n"
+HELP+="Options:  [-m (missing)|-l (lifecycle)]\n"
+HELP+="Example: \"$0 MetalManagement -m\" will create a Metal Management\n"
+HELP+="          pillar report about bugs that are missing something.\n"
+
+# Name and location of the working dir. We will work in it.
+WORK_DIR=/tmp/bug_report
+
+# Some HTML elements so its shorter to write...
+TDC='<td style="text-align: center">'
+
+# Mail stuff, note that sendmail is "simple" and needs header declaraions.
+SUBJECT="Subject:FINDPILLAR bugs that are missing something"
+
+# Test query.
+TEST_Q="https://bugzilla.redhat.com/buglist.cgi?f1=cf_internal_whiteboard&"
+TEST_Q+="f2=reporter&o1=substring&o2=equals&query_format=advanced&"
+TEST_Q+="v1=Telco&v2=augol%40redhat.com"
+
+# Default from and to, we override or add to those below.
+DEF_FROM="augol@redhat.com"
+DEF_TO="augol@redhat.com"
+
+# Per pillar/subject objects.
+
+# ---------------------------------------------------------------------------
+# Deployment pillar
+
+# Pillar name
+MEM_NAME="Metal Management"
+
+# Metal Management pillar bugs
+MEM_BZ_Q="https://bugzilla.redhat.com/buglist.cgi?bug_status=NEW&bug_status=ASSIGNED&bug_status=POST&bug_status=MODIFIED&bug_status=ON_DEV&bug_status=ON_QA&component=Installer&component=Cloud%20Compute&component=Bare%20Metal%20Hardware%20Provisioning&component=Networking&query_format=advanced&rh_sub_components=BareMetal%20Provider&rh_sub_components=baremetal-operator&rh_sub_components=cluster-api-provider&rh_sub_components=cluster-baremetal-operator&rh_sub_components=ironic&rh_sub_components=kubernetes-nmstate&rh_sub_components=kubernetes-nmstate-operator&rh_sub_components=mDNS&rh_sub_components=OpenShift%20on%20Bare%20Metal%20IPI"
+
+# Fields we care about
+MEM_CARES="1,2,3,4"
+
+# Mail stuff
+MEM_TO="augol-all@redhat.com,belwell@redhat.com"
+#MEM_TO="augol@redhat.com"
+MEM_FROM="From:$DEF_FROM"
+
+# ---------------------------------------------------------------------------
+# Management pillar
+
+# Pillar name
+MGT_NAME="Management"
+
+# Management pillar bugs
+MGT_BZ_Q="https://bugzilla.redhat.com/buglist.cgi?"
+MGT_BZ_Q+="bug_status=NEW&bug_status=ASSIGNED&bug_status=POST&"
+NGT_BZ_Q+="bug_status=MODIFIED&bug_status=ON_DEV&bug_status=ON_QA&"
+MGT_BZ_Q+="classification=Red%20Hat&f1=OP&f10=reporter&f11=reporter&"
+MGT_BZ_Q+="f12=reporter&f14=CP&f15=component&f2=reporter&f3=reporter&"
+MGT_BZ_Q+="f4=reporter&f5=reporter&f6=reporter&f7=reporter&f8=reporter&"
+MGT_BZ_Q+="f9=reporter&j1=OR&n15=1&o10=equals&o11=equals&"
+MGT_BZ_Q+="o12=equals&o15=equals&o2=equals&o3=equals&o4=equals&o5=equals&"
+MGT_BZ_Q+="o6=equals&o7=equals&o8=equals&o9=equals&product=OpenShift%20"
+MGT_BZ_Q+="Container%20Platform&query_format=advanced&v10=sasha%40redhat.com&"
+MGT_BZ_Q+="v11=ukalifon%40redhat.com&v12=yobshans%40redhat.com&v15=assisted-"
+MGT_BZ_Q+="installer&v2=bjacot%40redhat.com&v3=ccrum%40redhat.com&"
+MGT_BZ_Q+="v4=cvultur%40redhat.com&v5=gharden%40redhat.com&v6=iovadia%40"
+MGT_BZ_Q+="redhat.com&v7=lalon%40redhat.com&v8=mlammon%40redhat.com&"
+MGT_BZ_Q+="v9=nshidlin%40redhat.com"
+
+# Fields we care about
+MGT_CARES="2,3,4,5,6"
+
+# Mail stuff
+MGT_TO="ohochman@redhat.com"
+MGT_FROM="From:$DEF_FROM"
+
+# ---------------------------------------------------------------------------
+# CNF pillar
+
+# Pillar name
+CNF_NAME="CNF"
+
+# CNF pillar bugs
+CNF_BZ_Q="https://bugzilla.redhat.com/buglist.cgi?bug_status=NEW&bug_status="
+CNF_BZ_Q+="ASSIGNED&bug_status=POST&bug_status=MODIFIED&bug_status=ON_DEV&"
+CNF_BZ_Q+="bug_status=ON_QA&f1=cf_internal_whiteboard&o1=substring&"
+CNF_BZ_Q+="query_format=advanced&v1=Telco%3ACNF"
+
+# Fields we care about
+CNF_CARES="2,3,4,5,6"
+
+# Mail stuff
+CNF_TO="$DEF_TO"
+CNF_FROM="From:$DEF_FROM"
+
+# ---------------------------------------------------------------------------
+# Customer cases
+
+# Name
+CST_NAME="Customer"
+
+# Query for all customer cases
+CST_BZ_Q="https://bugzilla.redhat.com/buglist.cgi?f0=OP&f1="
+CST_BZ_Q+="cf_internal_whiteboard&f2=CP&f3=external_bugzilla.description&"
+CST_BZ_Q+="j0=OR&o1=substring&o3=substring&query_format="
+CST_BZ_Q+="advanced&v1=Telco&v3=Red%20Hat%20Customer%20Portal"
+
+# Query for open customer cases
+CST_BZ_QO="https://bugzilla.redhat.com/buglist.cgi?bug_status=NEW&bug_status="
+CST_BZ_QO+="ASSIGNED&bug_status=POST&bug_status=MODIFIED&bug_status=ON_DEV&"
+CST_BZ_QO+="bug_status=ON_QA&f1=cf_internal_whiteboard&f2=external_bugzilla."
+CST_BZ_QO+="description&o1=substring&o2=equals&query_format=advanced&v1="
+CST_BZ_QO+="Telco&v2=Red%20Hat%20Customer%20Portal"
+
+# Fields we care about
+CST_CARES="2,3,4,5,6"
+
+# Mail stuff
+CST_TO="$DEF_TO"
+CST_FROM="From:$DEF_FROM"
+# ---------------------------------------------------------------------------
+# Customer bugs, with one of the Ecosystem's QE as contact, that has no
+# qe_test_coverage(+|-) flag.
+TCB_BZ_Q="https://bugzilla.redhat.com/buglist.cgi?"
+TCB_BZ_Q+="f1=external_bugzilla.description&f10=qa_contact&f11=qa_contact&"
+TCB_BZ_Q+="f12=qa_contact&f13=qa_contact&f14=qa_contact&f15=qa_contact&"
+TCB_BZ_Q+="f16=qa_contact&f17=qa_contact&f18=qa_contact&f19=qa_contact&"
+TCB_BZ_Q+="f20=qa_contact&f21=qa_contact&f22=qa_contact&f23=qa_contact&"
+TCB_BZ_Q+="f24=qa_contact&f25=qa_contact&f26=qa_contact&f27=qa_contact&"
+TCB_BZ_Q+="f28=qa_contact&f29=qa_contact&f3=OP&f30=qa_contact&f31=qa_contact"
+TCB_BZ_Q+="&f32=qa_contact&f33=qa_contact&f34=qa_contact&f35=qa_contact&f36="
+TCB_BZ_Q+="qa_contact&f37=qa_contact&f38=qa_contact&f39=qa_contact&f4="
+TCB_BZ_Q+="qa_contact&f40=qa_contact&f41=qa_contact&f42=qa_contact&f43="
+TCB_BZ_Q+="qa_contact&f44=qa_contact&f45=qa_contact&f46=qa_contact&f47="
+TCB_BZ_Q+="qa_contact&f48=qa_contact&f49=qa_contact&f5=qa_contact&f50="
+TCB_BZ_Q+="qa_contact&f51=qa_contact&f52=qa_contact&f53=qa_contact&f54="
+TCB_BZ_Q+="qa_contact&f55=qa_contact&f56=qa_contact&f57=qa_contact&f58="
+TCB_BZ_Q+="qa_contact&f6=qa_contact&f61=CP&f62=OP&f63=product&f64=product&"
+TCB_BZ_Q+="f65=CP&f66=OP&f67=flagtypes.name&f68=flagtypes.name&f69=CP&f7="
+TCB_BZ_Q+="qa_contact&f8=qa_contact&f9=qa_contact&j3=OR&j62=OR&j66=OR&"
+TCB_BZ_Q+="n66=1&o1=equals&o10=equals&o11=equals&o12=equals&o13=equals&"
+TCB_BZ_Q+="o14=equals&o15=equals&o16=equals&o17=equals&o18=equals&o19=equals"
+TCB_BZ_Q+="&o20=equals&o21=equals&o22=equals&o23=equals&o24=equals&o25="
+TCB_BZ_Q+="equals&o26=equals&o27=equals&o28=equals&o29=equals&o30=equals&"
+TCB_BZ_Q+="o31=equals&o32=equals&o33=equals&o34=equals&o35=equals&o36=equals"
+TCB_BZ_Q+="&o37=equals&o38=equals&o39=equals&o4=equals&o40=equals&o41=equals"
+TCB_BZ_Q+="&o42=equals&o43=equals&o44=equals&o45=equals&o46=equals&o47="
+TCB_BZ_Q+="equals&o48=equals&o49=equals&o5=equals&o50=equals&o51=equals&o52="
+TCB_BZ_Q+="equals&o53=equals&o54=equals&o55=equals&o56=equals&o57=equals&"
+TCB_BZ_Q+="o58=equals&o6=equals&o63=equals&o64=equals&o67=equals&o68=equals&"
+TCB_BZ_Q+="o7=equals&o8=equals&o9=equals&query_format=advanced&v1="
+TCB_BZ_Q+="Red%20Hat%20Customer%20Portal&v10=ashoshan%40redhat.com&v11="
+TCB_BZ_Q+="augol%40redhat.com&v12=awolff%40redhat.com&v13="
+TCB_BZ_Q+="bjacot%40redhat.com&v14=ccrum%40redhat.com&v15="
+TCB_BZ_Q+="cvultur%40redhat.com&v16=dgonyier%40redhat.com&v17="
+TCB_BZ_Q+="elevin%40redhat.com&v18=elgerman%40redhat.com&v19="
+TCB_BZ_Q+="emjohnso%40redhat.com&v20=eweiss%40redhat.com&v21="
+TCB_BZ_Q+="gharden%40redhat.com&v22=gkopels%40redhat.com&v23="
+TCB_BZ_Q+="grajaiya%40redhat.com&v24=iovadia%40redhat.com&v25="
+TCB_BZ_Q+="josclark%40redhat.com&v26=juphoff%40redhat.com&v27="
+TCB_BZ_Q+="lalon%40redhat.com&v28=lshilin%40redhat.com&v29="
+TCB_BZ_Q+="mchernyk%40redhat.com&v30=mcornea%40redhat.com&v31="
+TCB_BZ_Q+="mlammon%40redhat.com&v32=mniranja%40redhat.com&v33="
+TCB_BZ_Q+="nkononov%40redhat.com&v34=nshidlin%40redhat.com&v35="
+TCB_BZ_Q+="nwaizer%40redhat.com&v36=obochan%40redhat.com&v37="
+TCB_BZ_Q+="ohochman%40redhat.com&v38=omarzian%40redhat.com&v39="
+TCB_BZ_Q+="omichael%40redhat.com&v4=achernet%40redhat.com&v40="
+TCB_BZ_Q+="prabinov%40redhat.com&v41=rbartal%40redhat.com&v42="
+TCB_BZ_Q+="rhalle%40redhat.com&v43=sguetta%40redhat.com&v44="
+TCB_BZ_Q+="shajmakh%40redhat.com&v45=smiron%40redhat.com&v46="
+TCB_BZ_Q+="sobarzan%40redhat.com&v47=svitnin%40redhat.com&v48="
+TCB_BZ_Q+="thilzenr%40redhat.com&v49=trowens%40redhat.com&v5="
+TCB_BZ_Q+="achuzhoy%40redhat.com&v50=trwest%40redhat.com&v51="
+TCB_BZ_Q+="ukalifon%40redhat.com&v52=vvoronko%40redhat.com&v53="
+TCB_BZ_Q+="ydalal%40redhat.com&v54=yfirst%40redhat.com&v55="
+TCB_BZ_Q+="yliu1%40redhat.com&v56=yobshans%40redhat.com&v57="
+TCB_BZ_Q+="yporagpa%40redhat.com&v58=yprokule%40redhat.com&v6="
+TCB_BZ_Q+="agurenko%40redhat.com&v63=OpenShift%20Container%20Platform&v64="
+TCB_BZ_Q+="Red%20Hat%20Advanced%20Cluster%20Management%20for%20Kubernetes&"
+TCB_BZ_Q+="v67=qe_test_coverage%2B&v68=qe_test_coverage-&v7="
+TCB_BZ_Q+="amalykhi%40redhat.com&v8=arivkin%40redhat.com&v9="
+TCB_BZ_Q+="asavina%40redhat.com"
+
+# ---------------------------------------------------------------------------
+# Blockers report - This is a premade report so only email and the name are
+# needed.
+
+# Mail stuff
+BLK_NAME="Blocker"
+BLK_TO="$DEF_TO"
+BLK_FROM="From:$DEF_FROM"
