@@ -1,5 +1,5 @@
 #!/bin/bash
-# set -e
+# set -x
 #
 ### PARAMETERS
 LOGDIR="/tmp/update"
@@ -8,12 +8,13 @@ LOGFILE=$LOGDIR/update_"$TIME"_log
 EMERGE="/usr/bin/emerge --color n --nospinner"
 SECONDS=0
 CONF_PATH="/home/augol/gdrive/config/config_kernel"
+BOOT_CONF="/boot/loader/entries/gentoo.conf"
 
 ### SETUP
 # Run only if root.
 set -e
 if [[ "$(whoami)" != "root" ]]; then
-	/bin/echo "This script needs to be run as root."
+	printf "%s\n" "This script needs to be run as root."
 	exit 1
 fi
 
@@ -23,12 +24,12 @@ if [ ! -d $LOGDIR ]; then
 fi
 
 # Initializing log file.
-/bin/echo "Started at $(date)" >"$LOGFILE"
+printf "Started at %s\n" "$(date)" >"$LOGFILE"
 
 ### FUNCTIONS
 function logger() {
 	# This is the format used in the log file.
-	/bin/echo -e "\n=== [$(date +%T)] $1\n" | tee -a "$LOGFILE"
+	printf "=== [%s] %s\n" "$(date +%T)" "$1" | tee -a "$LOGFILE"
 }
 
 function installed() {
@@ -76,13 +77,12 @@ function update_kernel() {
 	/usr/bin/make -j$(($(nproc) - 2)) 1>/dev/null
 	/usr/bin/make modules_install
 	rm -rf /boot/{config,System,vmlinuz}*-gentoo
-	/usr/bin/make install
+	/usr/bin/make install &>/dev/null
+
+	sed -i $CONF_PATH "s/vmlinuz.*\$/vmlinuz-$KERNEL_NEW/g"
 
 	chown augol:augol .config
 	cp .config "$CONF_PATH"
-
-	logger "Running GRUB"
-	/usr/sbin/grub-mkconfig -o /boot/grub/grub.cfg
 
 	logger "Rebuilding 3rd party modules."
 	emerge @module-rebuild &>/dev/null
@@ -141,17 +141,16 @@ case $@ in
 esac
 
 # On new installments, we might be missing a few packages...
-for pkg in "app-portage/gentoolkit" "sys-boot/grub" "sys-apps/mlocate" "dev-vcs/git"
-    do
-    if ! installed "$pkg"; then
-        logger "$pkg was not found on this system, installing it now."
-        $EMERGE "$pkg"
-    fi
+for pkg in "app-portage/gentoolkit" "sys-apps/mlocate" "dev-vcs/git"; do
+	if ! installed "$pkg"; then
+		logger "$pkg was not found on this system, installing it now."
+		$EMERGE "$pkg"
+	fi
 done
 
 # If this is a new system, gentoo-sources wants to have symlink USE
 if ! installed "sys-kernel/gentoo-sources"; then
-	echo "sys-kernel/gentoo-sources symlink" >/etc/portage/package.use/gentoo-sources
+	printf "%s\n" "sys-kernel/gentoo-sources symlink" >/etc/portage/package.use/gentoo-sources
 	$EMERGE "sys-kernel/gentoo-sources symlink"
 fi
 
@@ -167,7 +166,7 @@ fi
 
 if $RBLD; then
 	KERNEL_NEW="$(file /usr/src/linux | cut -d "-" -f 2-)"
-	printf "Building kernel version %s\n" "$KERNEL_NEW"
+	logger "Building kernel version $KERNEL_NEW"
 fi
 
 if $UPDT; then
@@ -216,7 +215,7 @@ if $UPDT; then
 		BUILDING=$(grep "Emerging (" "$LOGFILE" | tail -n 1)
 		if [[ "$BUILDING" != "$PREVIOUS" ]]; then
 			PREVIOUS="$BUILDING"
-			/bin/echo "$BUILDING"
+			printf "%s\n" "$BUILDING"
 		fi
 		sleep 1
 	done
@@ -262,7 +261,7 @@ fi
 logger "refreshing locate DB"
 updatedb
 
-#Time calculations
+# Time calculations
 TIME="$SECONDS"
 H=0
 M=0
@@ -283,7 +282,8 @@ else
 	logger "This script ran for $M minuts and $S seconds."
 fi
 
-/bin/echo "Compressing $LOGFILE"
+# At this point logger is done so I need to printf the last few lines.
+printf "Compressing %s\n" "$LOGFILE"
 xz "$LOGFILE"
-/bin/echo "Full log is in ${LOGFILE}.xz"
-/bin/echo "DONE"
+printf "Full log is in %s.xz\n" "${LOGFILE}.xz"
+printf "%s\n" "DONE"

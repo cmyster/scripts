@@ -43,12 +43,12 @@ if [ "$LENGTH" -gt 40 ]; then
 fi
 
 # Calculations that are used for sleep and BAR lenght later.
-if [ $LENGTH -gt $WAIT ]
-then
-	LENGTH=$((LENGTH + LENGTH % WAIT))
-else
-	LENGTH=$((LENGTH + WAIT % LENGTH))
-fi
+#if [ $LENGTH -gt $WAIT ]
+#then
+#	LENGTH=$((LENGTH + LENGTH % WAIT))
+#else
+#	LENGTH=$((LENGTH + WAIT % LENGTH))
+#fi
 
 TICK=$(bc <<<"scale=3; $WAIT / $LENGTH")
 
