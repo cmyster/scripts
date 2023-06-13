@@ -9,6 +9,8 @@ EMERGE="/usr/bin/emerge --color n --nospinner"
 SECONDS=0
 CONF_PATH="/home/augol/gdrive/config/config_kernel"
 BOOT_CONF="/boot/loader/entries/gentoo.conf"
+CP="$(which cp)"
+GREP="$(which grep)"
 
 ### SETUP
 # Run only if root.
@@ -29,12 +31,13 @@ printf "Started at %s\n" "$(date)" >"$LOGFILE"
 ### FUNCTIONS
 function logger() {
 	# This is the format used in the log file.
-	printf "=== [%s] %s\n" "$(date +%T)" "$1" | tee -a "$LOGFILE"
+	printf "[%s] %s\n" "$(date +%T)" "$1" | tee -a "$LOGFILE"
 }
 
 function installed() {
-	# Checking if a package is intalled or not.
-	if emerge -s "$1\$" | grep "Not Installed" &>/dev/null; then
+	# Checking if a package is intalled.
+	# Gets a package atom, returns an int bool.
+	if emerge -s "$1\$" | $GREP "Not Installed" &>/dev/null; then
 		return 1
 	else
 		return 0
@@ -45,8 +48,8 @@ function new_package() {
 	# Check if there is a newer package.
 	# Gets a package atom, returns an int bool.
 	$EMERGE -s "$1" &>"$LOGDIR"/new_package
-	INSTALLED=$(grep "installed" "$LOGDIR"/new_package | awk '{print $NF}')
-	AVAILABLE=$(grep "available" "$LOGDIR"/new_package | awk '{print $NF}')
+	INSTALLED=$($GREP "installed" "$LOGDIR"/new_package | awk '{print $NF}')
+	AVAILABLE=$($GREP "available" "$LOGDIR"/new_package | awk '{print $NF}')
 	rm -rf "$LOGDIR"/new_package
 	if [[ "$INSTALLED" != "$AVAILABLE" ]]; then
 		return 0
@@ -69,17 +72,16 @@ function update_kernel() {
 	cd /usr/src/linux
 	/usr/bin/make clean &>>"$LOGFILE"
 	/usr/bin/make mrproper &>>"$LOGFILE"
-	cp "$CONF_PATH" .config
+	"$CP" "$CONF_PATH" .config
 	/usr/bin/make olddefconfig &>>"$LOGFILE"
 
 	logger "Compiling a new kernel image."
 
 	/usr/bin/make -j$(($(nproc) - 2)) 1>/dev/null
 	/usr/bin/make modules_install
-	rm -rf /boot/{config,System,vmlinuz}*-gentoo
-	/usr/bin/make install &>/dev/null
-
-	sed -i $CONF_PATH "s/vmlinuz.*\$/vmlinuz-$KERNEL_NEW/g"
+	$CP -f vmlinux /boot/
+	$CP -f System.map /boot
+	$CP -f .config /boot/config
 
 	chown augol:augol .config
 	cp .config "$CONF_PATH"
@@ -92,7 +94,7 @@ function update_kernel() {
 	cd it87
 	# it87 want's to make sure that the GCC that was used for the 'running'
 	# kernel is the same one as the one used as the default GCC installed.
-	# If there was an updatre with both GCC and the kernel, it means that
+	# If there was an update with both GCC and the kernel, it means that
 	# the running kernel (which is not the latest) is compiled with an older
 	# GCC version. We need to change the Makefile so it will grab the latest
 	# kernel version from /usr/src/linux as this points to the latest kernel
@@ -108,6 +110,9 @@ function update_kernel() {
 	# At this point we can assume that we have new and old kernel resources
 	# installed, so we can remove the previous one as its not needed after
 	# the next reboot
+
+	rm -rf "/usr/src/linux-$KERNEL_OLD"
+	rm -rf "/usr/lib/modules/$KERNEL_OLD"
 }
 
 ### FUNCTIONS END
@@ -186,46 +191,42 @@ if $UPDT; then
 	done
 	logger "DONE"
 
-	# To overwrite a new vimrc, check if there is a new vim now and overwrite
-	# vimrc later.
-	NEW_VIM=false
-	if new_package "app-editors/vim$"; then
-		export NEW_VIM=true
-		if test -f "/etc/vim/vimrc"; then
-			cp /etc/vim/vimrc /etc/vim/vimrc_backup
-		fi
-	fi
-
-	# When compiling 3rd party modules, sometimes (it87) wants to make sure
+	# When compiling 3rd party modules, sometimes they (it87) want to make sure
 	# that the kernel was built with the exact version of the currently used
 	# compiler. If not, the kernel will have to be recompiled with the most
-	# up-to-date compiler.
+	# up-to-date compiler, even if there is no new kernel version.
 	NEW_COMPILER=false
 	if new_package "sys-devel/gcc$"; then
 		export NEW_COMPILER=true
+		logger "New GCC version is available. Installing it first."
+		$EMERGE --oneshot "sys-devel/gcc" &>>"$LOGFILE"
 	fi
 
-	# Running emerge on @world twice takes time, but it prints everything there-
-	# is to emerge in order which is nice for logging.
-	logger "Refreshing system"
+	### EMERGE UPDATE @WORLD
+
+	# Running emerge update @world twice takes time, but it prints everything there
+	# is to emerge in order, which is nice for logging.
+	logger "Refreshing @world"
 	$EMERGE --update --deep --changed-use --newuse --tree --ask --pretend @world
 	$EMERGE --update --deep --changed-use --newuse --with-bdeps=y --keep-going --tree @world &>>"$LOGFILE" &
 
 	while emerging; do
-		BUILDING=$(grep "Emerging (" "$LOGFILE" | tail -n 1)
+		BUILDING=$($GREP "Emerging (" "$LOGFILE" | tail -n 1)
 		if [[ "$BUILDING" != "$PREVIOUS" ]]; then
 			PREVIOUS="$BUILDING"
 			printf "%s\n" "$BUILDING"
 		fi
-		sleep 1
+		sleep 3
 	done
 	logger "DONE"
 
 	logger "Testing if there is a need for a new kernel image."
+
+	# After updateing, if there is a new kernel source, the linux symlink was changed.
 	KERNEL_NEW="$(file /usr/src/linux | cut -d "-" -f 2-)"
 	if [[ "$KERNEL_OLD" != "$KERNEL_NEW" ]]; then
 		logger "Current kernel version: $KERNEL_OLD will be replaced by new kernel version $KERNEL_NEW"
-		# we need to disable the NEW_COMPILER flag if we're going to compile the kernel anyway.
+		# We need to disable the NEW_COMPILER flag if we're going to compile the kernel anyway.
 		export NEW_COMPILER=false
 		update_kernel
 		logger "New kernel ($KERNEL_NEW) replaced older version ($KERNEL_OLD). Please reboot."
@@ -247,11 +248,6 @@ if $UPDT; then
 	logger "Rebuilding preserved packages where needed."
 	$EMERGE @preserved-rebuild &>>"$LOGFILE"
 	logger "DONE"
-
-	if $NEW_VIM; then
-		cp /etc/vim/vimrc_backup /etc/vim/vimrc
-		rm -rf /etc/vim/vimrc_backup
-	fi
 
 	logger "cleaning package and distfiles cache."
 	eclean-pkg -d | tail -n 1
