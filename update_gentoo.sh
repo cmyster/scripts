@@ -8,7 +8,6 @@ LOGFILE=$LOGDIR/update_"$TIME"_log
 EMERGE="/usr/bin/emerge --color n --nospinner"
 SECONDS=0
 CONF_PATH="/home/augol/gdrive/config/config_kernel"
-BOOT_CONF="/boot/loader/entries/gentoo.conf"
 CP="$(which cp)"
 GREP="$(which grep)"
 
@@ -83,7 +82,6 @@ function update_kernel() {
 	$CP -f System.map /boot
 	$CP -f .config /boot/config
 
-	chown augol:augol .config
 	cp .config "$CONF_PATH"
 
 	logger "Rebuilding 3rd party modules."
@@ -191,15 +189,29 @@ if $UPDT; then
 	done
 	logger "DONE"
 
-	# When compiling 3rd party modules, sometimes they (it87) want to make sure
+	# When compiling 3rd party modules, sometimes they will want to make sure
 	# that the kernel was built with the exact version of the currently used
 	# compiler. If not, the kernel will have to be recompiled with the most
 	# up-to-date compiler, even if there is no new kernel version.
+	# Since 3rd party modules will be brought in when we get and compile the
+	# latest kernel image, its safe to not call update_kernel here, because
+	# the next time there will be a newer kernel, it will already be compiled
+	# with the latest compiler.
 	NEW_COMPILER=false
 	if new_package "sys-devel/gcc$"; then
 		export NEW_COMPILER=true
 		logger "New GCC version is available. Installing it first."
 		$EMERGE --oneshot "sys-devel/gcc" &>>"$LOGFILE"
+	fi
+
+	# At this point, if there is a new kernel version, we want to get it and build it
+	# regardless if there was a new compiler or not.
+	# Otherwise, packages that are looking for /usr/src/linux/.config will fail because
+	# its not there yet.
+	if new_package "sys-kernel/gentoo-sources"; then
+		logger "New kernel version $KERNEL_NEW is available. Installing it first."
+		$EMERGE --oneshot "sys-kernel/gentoo-sources" &>>"$LOGFILE"
+		update_kernel
 	fi
 
 	### EMERGE UPDATE @WORLD
