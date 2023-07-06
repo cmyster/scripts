@@ -12,6 +12,7 @@ CP="$(which cp)"
 GREP="$(which grep)"
 
 ### SETUP
+
 # Run only if root.
 set -e
 if [[ "$(whoami)" != "root" ]]; then
@@ -28,13 +29,14 @@ fi
 printf "Started at %s\n" "$(date)" >"$LOGFILE"
 
 ### FUNCTIONS
+
 function logger() {
 	# This is the format used in the log file.
 	printf "[%s] %s\n" "$(date +%T)" "$1" | tee -a "$LOGFILE"
 }
 
 function installed() {
-	# Checking if a package is intalled.
+	# Checking if a package is installed.
 	# Gets a package atom, returns an int bool.
 	if emerge -s "$1\$" | $GREP "Not Installed" &>/dev/null; then
 		return 1
@@ -49,6 +51,8 @@ function new_package() {
 	$EMERGE -s "$1" &>"$LOGDIR"/new_package
 	INSTALLED=$($GREP "installed" "$LOGDIR"/new_package | awk '{print $NF}')
 	AVAILABLE=$($GREP "available" "$LOGDIR"/new_package | awk '{print $NF}')
+	export INSTALLED
+	export AVAILABLE
 	rm -rf "$LOGDIR"/new_package
 	if [[ "$INSTALLED" != "$AVAILABLE" ]]; then
 		return 0
@@ -66,54 +70,110 @@ function emerging() {
 	fi
 }
 
-function update_kernel() {
-	logger "Cleaning environemt before compiling a new kernel image."
+function delete_old_kernels() {
+	# If the argument came in empty, ignore and exit this function.
+	if [ -z "$1" ]; then
+		return 0
+	fi
+
+	cd /usr/src
+	ls -1 | grep -v "$1" | xargs rm -rf
+	cd /usr/lib/modules
+	ls -1 | grep -v "$1" | xargs rm -rf
+}
+
+function new_portage() {
+	for pkg in "app-portage/gentoolkit" "sys-apps/portage"; do
+		if new_package "$pkg"; then
+			logger "New $pkg version $AVAILABLE is available. Installing..."
+			$EMERGE --oneshot "$pkg" &>>"$LOGFILE"
+			tail "$LOGFILE"
+		else
+			logger "Installed $pkg version $INSTALLED is up-to-date."
+		fi
+	done
+}
+
+function new_kernel() {
+	if new_package "sys-kernel/gentoo-sources$"; then
+		logger "New kernel version $AVAILABLE is available. Installing it first."
+		$EMERGE --oneshot "sys-kernel/gentoo-sources" &>>"$LOGFILE"
+	else
+		logger "Current kernel version $INSTALLED is up-to-date."
+	fi
+}
+
+function new_compiler() {
+	NEW_COMPILER=false
+	if new_package "sys-devel/clang$"; then
+		# If we hadn't complied the kernel, this flag tells us we need to.
+		export NEW_COMPILER=true
+		logger "New clang version $AVAILABLE is available. Installing it first."
+		$EMERGE --oneshot "sys-devel/clang" &>>"$LOGFILE"
+	else
+		logger "Current clang version $INSTALLED is up-to-date."
+	fi
+}
+
+function build_kernel() {
+	logger "Cleaning environment before compiling a new kernel image."
 	cd /usr/src/linux
 	/usr/bin/make clean &>>"$LOGFILE"
 	/usr/bin/make mrproper &>>"$LOGFILE"
 	"$CP" "$CONF_PATH" .config
-	/usr/bin/make olddefconfig &>>"$LOGFILE"
+	/usr/bin/make LLVM=1 LLVM_IAS=1 KCFLAGS="-O3 -march=znver3 -pipe" olddefconfig &>>"$LOGFILE"
 
 	logger "Compiling a new kernel image."
 
-	/usr/bin/make -j$(($(nproc) - 2)) 1>/dev/null
+	/usr/bin/make -j$(($(nproc) - 2)) LLVM=1 LLVM_IAS=1 KCFLAGS="-O3 -march=znver3 -pipe" 1>/dev/null
 	/usr/bin/make modules_install
-	$CP -f vmlinux /boot/
-	$CP -f System.map /boot
+	rm /boot/{vmlinuz,System.map,config}
+	/usr/bin/make install &>/dev/null
 	$CP -f .config /boot/config
 
-	cp .config "$CONF_PATH"
+	$CP .config "$CONF_PATH"
 
 	logger "Rebuilding 3rd party modules."
 	emerge @module-rebuild &>/dev/null
 
-	logger "replacing it87 module with the one from frankcrawford/it87."
-	git clone https://github.com/frankcrawford/it87
-	cd it87
-	# it87 want's to make sure that the GCC that was used for the 'running'
-	# kernel is the same one as the one used as the default GCC installed.
-	# If there was an update with both GCC and the kernel, it means that
-	# the running kernel (which is not the latest) is compiled with an older
-	# GCC version. We need to change the Makefile so it will grab the latest
-	# kernel version from /usr/src/linux as this points to the latest kernel
-	# at this stage, which is how we discover KERNEL_NEW earlier.
-	sed -i 's,uname -r,file /usr/src/linux | cut -d "-" -f 2-,' Makefile
-	make clean
-	make
-	find /usr/lib/modules -name it87.ko.gz -exec rm -f {} \;
-	make install
-	cd ..
-	rm -rf it87
+	# At this point we can assume that we have new and old kernel resources installed,
+	# so we can remove the previous ones as they're not needed after the next reboot.
 
-	# At this point we can assume that we have new and old kernel resources
-	# installed, so we can remove the previous one as its not needed after
-	# the next reboot
-
-	rm -rf "/usr/src/linux-$KERNEL_OLD"
-	rm -rf "/usr/lib/modules/$KERNEL_OLD"
+	delete_old_kernels "$(head /boot/config | grep "Kernel Configuration" | awk '{print $3}')"
 }
 
-### FUNCTIONS END
+function should_build_kernel() {
+	KERNEL_RUNNING="$(uname -r | cut -d "-" -f 1)"
+	KERNEL_COMPILED="$(head /boot/config | grep "Kernel Configuration" | cut -d "-" -f 1 | cut -d " " -f 3)"
+	KERNEL_AVAILABLE="$(emerge -s sys-kernel/gentoo-source | grep "Latest version available" | awk '{print $NF}')"
+	KERNEL_EMERGED="$(emerge -s sys-kernel/gentoo-source | grep "Latest version installed" | awk '{print $NF}')"
+
+	if [[ "$KERNEL_RUNNING" == "$KERNEL_COMPILED" ]]; then
+		logger "Kernel version $KERNEL_RUNNING is up-to-date."
+	fi
+
+	if [[ "$KERNEL_RUNNING" != "$KERNEL_COMPILED" ]]; then
+		logger "The loaded kernel ($KERNEL_RUNNING) and the compiled one ($KERNEL_COMPILED) are not the same!"
+	fi
+
+	if [[ "$KERNEL_EMERGED" != "$KERNEL_AVAILABLE" ]]; then
+		logger "Current kernel $KERNEL_EMERGED will be replaced by $KERNEL_AVAILABLE"
+		build_kernel
+		return 0
+	fi
+
+	if [[ "$KERNEL_COMPILED" != "$KERNEL_AVAILABLE" ]]; then
+		logger "Current kernel $KERNEL_COMPILED will be replaced by $KERNEL_AVAILABLE"
+		build_kernel
+		return 0
+	fi
+
+	if $NEW_COMPILER; then
+		logger "New compiler installed, rebuilding the kernel"
+		build_kernel
+		return 0
+	fi
+}
 
 ### BEGIN
 
@@ -152,15 +212,16 @@ for pkg in "app-portage/gentoolkit" "sys-apps/mlocate" "dev-vcs/git"; do
 done
 
 # If this is a new system, gentoo-sources wants to have symlink USE
-if ! installed "sys-kernel/gentoo-sources"; then
+if ! installed "sys-kernel/gentoo-sources "; then
+    if [ ! -d /etc/portage/package.use ]; then
+		mkdir -p /etc/portage/package.use
+	fi
 	printf "%s\n" "sys-kernel/gentoo-sources symlink" >/etc/portage/package.use/gentoo-sources
-	$EMERGE "sys-kernel/gentoo-sources symlink"
+	$EMERGE "sys-kernel/gentoo-sources"
 fi
 
-KERNEL_OLD="$(uname -r)"
-
 if $SYNC; then
-	# Synchronize, and print the last part of the proccess.
+	# Synchronize, and print the last part of the process.
 	logger "Synchronizing..."
 	$EMERGE --sync &>>"$LOGFILE"
 	tail "$LOGFILE"
@@ -168,56 +229,41 @@ if $SYNC; then
 fi
 
 if $RBLD; then
-	KERNEL_NEW="$(file /usr/src/linux | cut -d "-" -f 2-)"
-	logger "Building kernel version $KERNEL_NEW"
+	KERNEL="$(file /usr/src/linux | cut -d "-" -f 2-)"
+	logger "Building kernel version $KERNEL"
+	build_kernel
+	exit 0
 fi
 
 if $UPDT; then
 	# Making sure portage is up-to-date before emerging world.
-	# Sometimes GenToolKit blocks compiling a new portage between versions,
-	# sould be safe to oneshot before portage if there is a new version of it.
+	# Sometimes GenToolKit blocks compiling a new portage between versions.
+	# It should be safe to oneshot it before portage if there is a new version.
 	# After that, oneshot portage.
-	for pkg in "app-portage/gentoolkit" "sys-apps/portage"; do
-		if new_package "$pkg"; then
-			logger "New $pkg version $AVAILABLE is available. Installing..."
-			$EMERGE --oneshot "$pkg" &>>"$LOGFILE"
-			tail "$LOGFILE"
-			logger "DONE"
-		else
-			logger "Installed $pkg version $INSTALLED is up-to-date."
-		fi
-	done
-	logger "DONE"
+	new_portage
 
-	# When compiling 3rd party modules, sometimes they will want to make sure
-	# that the kernel was built with the exact version of the currently used
-	# compiler. If not, the kernel will have to be recompiled with the most
-	# up-to-date compiler, even if there is no new kernel version.
-	# Since 3rd party modules will be brought in when we get and compile the
-	# latest kernel image, its safe to not call update_kernel here, because
-	# the next time there will be a newer kernel, it will already be compiled
-	# with the latest compiler.
-	NEW_COMPILER=false
-	if new_package "sys-devel/gcc$"; then
-		export NEW_COMPILER=true
-		logger "New GCC version is available. Installing it first."
-		$EMERGE --oneshot "sys-devel/gcc" &>>"$LOGFILE"
-	fi
+	# The following steps will make sure that prior to updating @world, the compiler and kernel are the most up-to-date:
 
-	# At this point, if there is a new kernel version, we want to get it and build it
-	# regardless if there was a new compiler or not.
-	# Otherwise, packages that are looking for /usr/src/linux/.config will fail because
-	# its not there yet.
-	if new_package "sys-kernel/gentoo-sources"; then
-		logger "New kernel version $KERNEL_NEW is available. Installing it first."
-		$EMERGE --oneshot "sys-kernel/gentoo-sources" &>>"$LOGFILE"
-		update_kernel
-	fi
+	# 1. If there is a new compiler, we start from it.
+	new_compiler
+
+	# 2. If there is a new kernel version, we want to get it regardless if there was a new compiler or not.
+	new_kernel
+
+	# 3. At this point if we might have a new compiler or a new kernel so we need to consider if we should build the kernel:
+	#   a. The loaded kernel and the compiled kernel are the same version, meaning there were no updates, no need to build.
+	#   b. The loaded kernel is different from the compiled kernel. Since we always load the compiled kernel during boot,
+	#      it means that the compiled kernel is newer than the one loaded, and we did not reboot since we compiled it, so no
+	#      need to build, and a reboot will take care of this difference.
+	#   c. The emerged and the available kernels differ, so we need to build the new available kernel.
+	#   d. If @world update replaced the kernel in /usr/src/linux but for some reason the compiled kernel differs when we run
+	#      this script, it means that we skipped build_kernel and we want to do it now.
+	#   e. If there was a new compiler, we need to build the kernel regardless if there was a new kernel or not.
+	should_build_kernel
 
 	### EMERGE UPDATE @WORLD
 
-	# Running emerge update @world twice takes time, but it prints everything there
-	# is to emerge in order, which is nice for logging.
+	# Running emerge update @world twice takes time, but it prints everything to build in order, which is nice for logging.
 	logger "Refreshing @world"
 	$EMERGE --update --deep --changed-use --newuse --tree --ask --pretend @world
 	$EMERGE --update --deep --changed-use --newuse --with-bdeps=y --keep-going --tree @world &>>"$LOGFILE" &
@@ -228,40 +274,17 @@ if $UPDT; then
 			PREVIOUS="$BUILDING"
 			printf "%s\n" "$BUILDING"
 		fi
-		sleep 3
+		# I never saw emerge taking less than a few seconds between packages so 2 seconds is a safe bet.
+		sleep 2
 	done
-	logger "DONE"
-
-	logger "Testing if there is a need for a new kernel image."
-
-	# After updateing, if there is a new kernel source, the linux symlink was changed.
-	KERNEL_NEW="$(file /usr/src/linux | cut -d "-" -f 2-)"
-	if [[ "$KERNEL_OLD" != "$KERNEL_NEW" ]]; then
-		logger "Current kernel version: $KERNEL_OLD will be replaced by new kernel version $KERNEL_NEW"
-		# We need to disable the NEW_COMPILER flag if we're going to compile the kernel anyway.
-		export NEW_COMPILER=false
-		update_kernel
-		logger "New kernel ($KERNEL_NEW) replaced older version ($KERNEL_OLD). Please reboot."
-	else
-		logger "Current kernel version ($KERNEL_OLD) is up-to-date"
-	fi
-
-	if $NEW_COMPILER; then
-		logger "New compiler means we need to recompiled the kernel."
-		update_kernel
-	fi
-
-	logger "DONE"
 
 	logger "Removing obsolete packages."
 	$EMERGE --depclean
-	logger "DONE"
 
 	logger "Rebuilding preserved packages where needed."
 	$EMERGE @preserved-rebuild &>>"$LOGFILE"
-	logger "DONE"
 
-	logger "cleaning package and distfiles cache."
+	logger "Cleaning package and distfiles cache."
 	eclean-pkg -d | tail -n 1
 	eclean-dist -d | tail -n 1
 fi
@@ -285,13 +308,13 @@ M=$((TIME / 60))
 S=$((TIME % 60))
 
 if [ $H -gt 0 ]; then
-	logger "This script ran for $H hours, $M minuts and $S seconds."
+	logger "This script ran for $H hours, $M minuets and $S seconds."
 else
-	logger "This script ran for $M minuts and $S seconds."
+	logger "This script ran for $M minuets and $S seconds."
 fi
 
-# At this point logger is done so I need to printf the last few lines.
-printf "Compressing %s\n" "$LOGFILE"
+logger "Compressing $LOGFILE"
 xz "$LOGFILE"
+# At this point logger is done so I need to printf the last few lines.
 printf "Full log is in %s.xz\n" "${LOGFILE}.xz"
 printf "%s\n" "DONE"
