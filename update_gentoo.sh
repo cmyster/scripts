@@ -85,7 +85,7 @@ function delete_old_kernels() {
 function new_portage() {
 	for pkg in "app-portage/gentoolkit" "sys-apps/portage"; do
 		if new_package "$pkg"; then
-			logger "New $pkg version $AVAILABLE is available. Installing..."
+			logger "New $pkg version $AVAILABLE is available. Installing."
 			$EMERGE --oneshot "$pkg" &>>"$LOGFILE"
 			tail "$LOGFILE"
 		else
@@ -96,10 +96,8 @@ function new_portage() {
 
 function new_kernel() {
 	if new_package "sys-kernel/gentoo-sources$"; then
-		logger "New kernel version $AVAILABLE is available. Installing it first."
+		logger "New kernel version $AVAILABLE is available. Emerging it now."
 		$EMERGE --oneshot "sys-kernel/gentoo-sources" &>>"$LOGFILE"
-	else
-		logger "Current kernel version $INSTALLED is up-to-date."
 	fi
 }
 
