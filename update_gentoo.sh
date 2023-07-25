@@ -98,6 +98,8 @@ function new_kernel() {
 	if new_package "sys-kernel/gentoo-sources$"; then
 		logger "New kernel version $AVAILABLE is available. Emerging it now."
 		$EMERGE --oneshot "sys-kernel/gentoo-sources" &>>"$LOGFILE"
+		rm -f /usr/src/linux
+		ln -s /usr/src/linux-"$AVAILABLE" /usr/src/linux
 	fi
 }
 
