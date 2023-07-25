@@ -119,11 +119,11 @@ function build_kernel() {
 	/usr/bin/make clean &>>"$LOGFILE"
 	/usr/bin/make mrproper &>>"$LOGFILE"
 	"$CP" "$CONF_PATH" .config
-	/usr/bin/make LLVM=1 LLVM_IAS=1 KCFLAGS="-O3 -march=znver3 -pipe" olddefconfig &>>"$LOGFILE"
+	/usr/bin/make LLVM=1 LLVM_IAS=1 KCFLAGS="-O3 -march=native" olddefconfig &>>"$LOGFILE"
 
 	logger "Compiling a new kernel image."
 
-	/usr/bin/make -j$(($(nproc) - 2)) LLVM=1 LLVM_IAS=1 KCFLAGS="-O3 -march=znver3 -pipe" 1>/dev/null
+	/usr/bin/make -j$(($(nproc) - 2)) LLVM=1 LLVM_IAS=1 KCFLAGS="-O3 -march=native" 1>/dev/null
 	/usr/bin/make modules_install
 	rm /boot/{vmlinuz,System.map,config}
 	/usr/bin/make install &>/dev/null
@@ -147,7 +147,7 @@ function should_build_kernel() {
 	KERNEL_EMERGED="$(emerge -s sys-kernel/gentoo-source | grep "Latest version installed" | awk '{print $NF}')"
 
 	if [[ "$KERNEL_RUNNING" == "$KERNEL_COMPILED" ]]; then
-		logger "Kernel version $KERNEL_RUNNING is up-to-date."
+		logger "Current running kernel $KERNEL_RUNNING is the same as the compiled kernel $KERNEL_COMPILED."
 	fi
 
 	if [[ "$KERNEL_RUNNING" != "$KERNEL_COMPILED" ]]; then
@@ -211,7 +211,7 @@ done
 
 # If this is a new system, gentoo-sources wants to have symlink USE
 if ! installed "sys-kernel/gentoo-sources "; then
-    if [ ! -d /etc/portage/package.use ]; then
+	if [ ! -d /etc/portage/package.use ]; then
 		mkdir -p /etc/portage/package.use
 	fi
 	printf "%s\n" "sys-kernel/gentoo-sources symlink" >/etc/portage/package.use/gentoo-sources
