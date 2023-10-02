@@ -55,7 +55,7 @@ do
     PACKAGE=$(printf "%s" "${line#*\/}" | rev | cut -d "-" -f 2- | rev)
     VERSION=$(printf "%s" "${line#*\/}" | rev | cut -d "-" -f 1 | rev)
     EBUILD=$(/usr/bin/grep -E "$CATEGORY.*/$PACKAGE.*$VERSION" "$WORK_DIR/all_ebuilds")
-    printf "\r                                                                                                                                                                \r"
+    printf "\r                                                                                                                  \r"
     printf "[%s out of %s] - ${CATEGORY}/${PACKAGE}" "$INDEX" "$PACKS"
     # Only write if the variable is not empty.
     if [ -n "$EBUILD" ]
@@ -86,8 +86,9 @@ printf "There are %s ebuilds to go over.\n" "$EBUILDS"
 INDEX=1
 while read -r ebuild
 do
-    printf "\r                                                                                                                                                                \r"
+    printf "\r                                                                                                                  \r"
     printf "[%s out of %s] - %s" "$INDEX" "$EBUILDS" "$ebuild"
+    printf "### %s ###\n" "$ebuild" &>> $LOG_FILE
     ebuild "$ebuild" clean prepare &>> $LOG_FILE
     INDEX=$((INDEX+1))
 done < $WORK_DIR/ebuilds
@@ -101,8 +102,30 @@ then
     SECONDS="0$SECONDS"
 fi
 
-printf "Done in %s:%s.\nLog file is at: %s\n" "$MINUTES" "$SECONDS" "$LOG_FILE"
-printf "You can use less and search for \"Checking for suitable kernel configuration options\"\nto see if there are any missing kernel configuration options.\n"
+# The interesting finds are when a prepare command would write:
+# "Checking for suitable kernel configuration options" and the next
+# line after that is not "[ ok ]".
+INDEX=1
+while read -r line
+do
+    if [[ "$line" == *"###"* ]]
+    then
+        current=$line
+    fi
+    
+    if [[ "$line" == *"Checking for suitable kernel configuration options"* ]]
+    then
+        NEXT_LINE=$(sed -n "$((INDEX+1))p" $LOG_FILE)
+        if [ "$NEXT_LINE" != " [ ok ]" ]
+        then
+            printf "%s\n" "$current"
+            sed -n "$((INDEX+1)),$((INDEX+15))p" $LOG_FILE | /usr/bin/grep "###\|CONFIG"
+        fi
+    fi
+    INDEX=$((INDEX+1))
+done < $LOG_FILE
+
+printf "Done in %s:%s.\nFull log file is at: %s\n" "$MINUTES" "$SECONDS" "$LOG_FILE"
 
 # Cleanup
 rm -rf $WORK_DIR
