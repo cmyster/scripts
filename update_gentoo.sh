@@ -98,8 +98,10 @@ function new_kernel() {
 	if new_package "sys-kernel/gentoo-sources$"; then
 		logger "New kernel version $AVAILABLE is available. Emerging it now."
 		$EMERGE --oneshot "sys-kernel/gentoo-sources" &>>"$LOGFILE"
-		rm -f /usr/src/linux
-		ln -s /usr/src/linux-"$AVAILABLE" /usr/src/linux
+		# At this point we expect that the most up-to-date folder is tne new linux source,
+		# so we can use ls's natural sorting to give us the very last (and latest) folder.
+		rm -rf /usr/src/linux
+		ln -s /usr/src/$(ls -1 /usr/src | grep linux | sort | tail -n 1) /usr/src/linux
 	fi
 }
 
@@ -108,8 +110,8 @@ function new_compiler() {
 	if new_package "sys-devel/clang$"; then
 		# If we hadn't complied the kernel, this flag tells us we need to.
 		export NEW_COMPILER=true
-		logger "New clang version $AVAILABLE is available. Installing it first."
-		$EMERGE --oneshot "sys-devel/clang" &>>"$LOGFILE"
+		logger "New clang version $AVAILABLE is available. Installing the new build chain first."
+		$EMERGE "sys-devel/clang" &>>"$LOGFILE"
 	else
 		logger "Current clang version $INSTALLED is up-to-date."
 	fi
@@ -127,7 +129,7 @@ function build_kernel() {
 
 	/usr/bin/make -j$(($(nproc) - 2)) LLVM=1 LLVM_IAS=1 KCFLAGS="-O3 -march=native" 1>/dev/null
 	/usr/bin/make modules_install
-	rm /boot/{vmlinuz,System.map,config}
+	rm -rf /boot/{vmlinuz,System.map,config}
 	/usr/bin/make install &>/dev/null
 	$CP -f .config /boot/config
 
@@ -198,26 +200,32 @@ case $@ in
 	UPDT=true
 	;;
 *)
-	printf "use %s -s to sync, -u to update, -k to rebuild the kernel,\n or -f to do all.\n" "$0"
+	printf "use %s -s to sync, -u to update, -k to rebuild an existing kernel,\n or -f to do all.\n" "$0"
 	exit 0
 	;;
 esac
 
+# Making sure that the profile is loaded, which is crucial for instance in a chrooted environment.
+. /etc/profile
+
+
 # On new installments, we might be missing a few packages...
-for pkg in "app-portage/gentoolkit" "sys-apps/mlocate" "dev-vcs/git"; do
+# First, we need to make sure that we have a working repo tree
+if [ ! -d /var/db/repos/gentoo/sys-kernel/gentoo-sources ]; then
+	logger "The gentoo/sys-kernel/gentoo-sources folder is missing. Did you forget to do emerge-webrsync?"
+	exit 1
+fi
+	
+for pkg in "app-portage/gentoolkit" "sys-apps/mlocate" "dev-vcs/git" "sys-kernel/gentoo-sources"; do
 	if ! installed "$pkg"; then
 		logger "$pkg was not found on this system, installing it now."
 		$EMERGE "$pkg"
 	fi
 done
 
-# If this is a new system, gentoo-sources wants to have symlink USE
-if ! installed "sys-kernel/gentoo-sources "; then
-	if [ ! -d /etc/portage/package.use ]; then
-		mkdir -p /etc/portage/package.use
-	fi
-	printf "%s\n" "sys-kernel/gentoo-sources symlink" >/etc/portage/package.use/gentoo-sources
-	$EMERGE "sys-kernel/gentoo-sources"
+# If this is a new system, /usr/src/linux needs to point to the correct folder
+if [ ! -L /usr/src/linux ]; then
+	ln -s "$(ls -1 /usr/src | grep linux | sort | tail -n 1)" "/usr/src/linux"
 fi
 
 if $SYNC; then
@@ -289,7 +297,7 @@ if $UPDT; then
 	eclean-dist -d | tail -n 1
 fi
 
-logger "refreshing locate DB"
+logger "Refreshing locate DB"
 updatedb
 
 # Time calculations
@@ -318,3 +326,4 @@ xz "$LOGFILE"
 # At this point logger is done so I need to printf the last few lines.
 printf "Full log is in %s.xz\n" "${LOGFILE}.xz"
 printf "%s\n" "DONE"
+
