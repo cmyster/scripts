@@ -94,14 +94,6 @@ do
 done < $WORK_DIR/ebuilds
 printf "\n"
 
-#Calculate runtime
-MINUTES=$((SECONDS / 60))
-SECONDS=$((SECONDS % 60))
-if [ "$SECONDS" -lt 10 ]
-then
-    SECONDS="0$SECONDS"
-fi
-
 # The interesting finds are when a prepare command would write:
 # "Checking for suitable kernel configuration options" and the next
 # line after that is not "[ ok ]".
@@ -124,6 +116,14 @@ do
     fi
     INDEX=$((INDEX+1))
 done < $LOG_FILE
+
+#Calculate runtime
+MINUTES=$((SECONDS / 60))
+SECONDS=$((SECONDS % 60))
+if [ "$SECONDS" -lt 10 ]
+then
+    SECONDS="0$SECONDS"
+fi
 
 printf "Done in %s:%s.\nFull log file is at: %s\n" "$MINUTES" "$SECONDS" "$LOG_FILE"
 
