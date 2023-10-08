@@ -106,12 +106,18 @@ function new_kernel() {
 }
 
 function new_compiler() {
+	# Looking only for clang here because if it has newer version, the entire toolchain was updated.
+	# If lld is not in 'world' then after we clean the environment, it gets removed.
+	# If lld is in 'world' but we update only clang, emerge does not pick up lld's new version and
+	# creates a blocking update conflict.
+	# The solution here is to emerge both, so both are in 'world' and emerge would pick the entire chain,
+	# and nothing is removed at the end when cleaning up.
 	NEW_COMPILER=false
 	if new_package "sys-devel/clang$"; then
 		# If we hadn't complied the kernel, this flag tells us we need to.
 		export NEW_COMPILER=true
 		logger "New clang version $AVAILABLE is available. Installing the new build chain first."
-		$EMERGE "sys-devel/clang" &>>"$LOGFILE"
+		$EMERGE "sys-devel/clang" "sys-devel/lld" &>>"$LOGFILE"
 	else
 		logger "Current clang version $INSTALLED is up-to-date."
 	fi
@@ -208,14 +214,13 @@ esac
 # Making sure that the profile is loaded, which is crucial for instance in a chrooted environment.
 . /etc/profile
 
-
 # On new installments, we might be missing a few packages...
 # First, we need to make sure that we have a working repo tree
 if [ ! -d /var/db/repos/gentoo/sys-kernel/gentoo-sources ]; then
 	logger "The gentoo/sys-kernel/gentoo-sources folder is missing. Did you forget to do emerge-webrsync?"
 	exit 1
 fi
-	
+
 for pkg in "app-portage/gentoolkit" "sys-apps/mlocate" "dev-vcs/git" "sys-kernel/gentoo-sources"; do
 	if ! installed "$pkg"; then
 		logger "$pkg was not found on this system, installing it now."
@@ -326,4 +331,3 @@ xz "$LOGFILE"
 # At this point logger is done so I need to printf the last few lines.
 printf "Full log is in %s.xz\n" "${LOGFILE}.xz"
 printf "%s\n" "DONE"
-
