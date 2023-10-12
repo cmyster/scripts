@@ -148,6 +148,12 @@ function build_kernel() {
 	# so we can remove the previous ones as they're not needed after the next reboot.
 
 	delete_old_kernels "$(head /boot/config | grep "Kernel Configuration" | awk '{print $3}')"
+
+	# Lasly, we want to make sure that the 'linux' symlink is pointing to the correct folder.
+	# This can happen sometimes if there was an issue.
+	if ! readlink /usr/src/linux &>/dev/null; then
+		ln -s /usr/src/$(ls -1 /usr/src | grep linux | sort | tail -n 1) /usr/src/linux
+	fi
 }
 
 function should_build_kernel() {
@@ -279,7 +285,7 @@ if $UPDT; then
 	# Running emerge update @world twice takes time, but it prints everything to build in order, which is nice for logging.
 	logger "Refreshing @world"
 	$EMERGE --update --deep --changed-use --newuse --tree --ask --pretend @world
-	$EMERGE --update --deep --changed-use --newuse --with-bdeps=y --keep-going --tree @world &>>"$LOGFILE" &
+	$EMERGE --update --deep --changed-use --newuse --with-bdeps=y --keep-going --tree --backtrack=15 @world &>>"$LOGFILE" &
 
 	while emerging; do
 		BUILDING=$($GREP "Emerging (" "$LOGFILE" | tail -n 1)
