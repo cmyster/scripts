@@ -131,10 +131,10 @@ function build_kernel() {
 	"$CP" "$CONF_PATH" .config
 	/usr/bin/make LLVM=1 LLVM_IAS=1 KCFLAGS="-O3 -march=native" olddefconfig &>>"$LOGFILE"
 
-	logger "Compiling a new kernel image."
+	logger "Compiling and installing a new kernel image."
 
 	/usr/bin/make -j$(($(nproc) - 2)) LLVM=1 LLVM_IAS=1 KCFLAGS="-O3 -march=native" 1>/dev/null
-	/usr/bin/make modules_install
+	/usr/bin/make modules_install 1>/dev/null
 	rm -rf /boot/{vmlinuz,System.map,config}
 	/usr/bin/make install &>/dev/null
 	$CP -f .config /boot/config

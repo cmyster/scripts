@@ -1,8 +1,7 @@
 #!/bin/bash
-read input
-if [[ $input == "Y" || $input == "y" ]]
-then
-        echo OK
+read -r input
+if [[ $input == "Y" || $input == "y" ]]; then
+	echo OK
 else
-        echo so no
+	echo so no
 fi
