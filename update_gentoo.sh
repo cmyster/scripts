@@ -158,6 +158,9 @@ function build_kernel() {
 
 function should_build_kernel() {
 	KERNEL_RUNNING="$(uname -r | cut -d "-" -f 1)"
+	# The way that this script works, /boot/config exists and is updated with the lastest image.
+	# This file is a 'cp' command that happens at the end of the compilation and installation.
+	# If the file is missing, then some error happened and we did not reach that point last time.
 	KERNEL_COMPILED="$(head /boot/config | grep "Kernel Configuration" | cut -d "-" -f 1 | cut -d " " -f 3)"
 	KERNEL_AVAILABLE="$(emerge -s sys-kernel/gentoo-source | grep "Latest version available" | awk '{print $NF}')"
 	KERNEL_EMERGED="$(emerge -s sys-kernel/gentoo-source | grep "Latest version installed" | awk '{print $NF}')"
