@@ -4,16 +4,16 @@ from selenium import webdriver
 from selenium.webdriver import FirefoxOptions
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
-from sys import argv, exit:
+from sys import argv, exit
 
 # This command is used to send email with ssmtp.
-#cmd = 'echo -e "To: amit.ugol@gmail.com,yigal.dalal@gmail.com,nlevinki@redhat.com,rbartal@redhat.com,lshilin@redhat.com\nSubject: Lotto has reached a large sum.\n" |'
-#cmd += '(cat - && uuencode /tmp/next.png next.png) |'
-#cmd += '/usr/sbin/ssmtp amit.ugol@gmail.com yigal.dalal@gmail.com nlevinki@redhat.com rbartal@redhat.com lshilin@redhat.com'
+# cmd = 'echo -e "To: amit.ugol@gmail.com,yigal.dalal@gmail.com,nlevinki@redhat.com,rbartal@redhat.com,lshilin@redhat.com\nSubject: Lotto has reached a large sum.\n" |'
+# cmd += '(cat - && uuencode /tmp/next.png next.png) |'
+# cmd += '/usr/sbin/ssmtp amit.ugol@gmail.com yigal.dalal@gmail.com nlevinki@redhat.com rbartal@redhat.com lshilin@redhat.com'
 
-#cmd = 'echo -e "To: amit.ugol@gmail.com\nSubject: Lotto has reached a large sum.\n" |'
-#cmd += '(cat - && uuencode /tmp/next.png next.png) |'
-#cmd += '/usr/sbin/ssmtp amit.ugol@gmail.com'
+# cmd = 'echo -e "To: amit.ugol@gmail.com\nSubject: Lotto has reached a large sum.\n" |'
+# cmd += '(cat - && uuencode /tmp/next.png next.png) |'
+# cmd += '/usr/sbin/ssmtp amit.ugol@gmail.com'
 
 # Expecting a single argument.
 if len(argv) != 2:
@@ -67,3 +67,10 @@ if sum >= prize:
 ff.close()
 system("rm -rf /home/augol/geckodriver.log")
 system("rm -rf /tmp/next.png")
+
+# I want to call ff.close() and then remove the log file.
+ff.quit()
+exit(0)
+
+# End of lotto.py
+

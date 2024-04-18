@@ -95,9 +95,9 @@ function new_portage() {
 }
 
 function new_kernel() {
-	if new_package "sys-kernel/gentoo-sources$"; then
+	if new_package "sys-kernel/vanilla-sources$"; then
 		logger "New kernel version $AVAILABLE is available. Emerging it now."
-		$EMERGE --oneshot "sys-kernel/gentoo-sources" &>>"$LOGFILE"
+		$EMERGE --oneshot "sys-kernel/vanilla-sources" &>>"$LOGFILE"
 		# At this point we expect that the most up-to-date folder is tne new linux source,
 		# so we can use ls's natural sorting to give us the very last (and latest) folder.
 		rm -rf /usr/src/linux
@@ -117,7 +117,7 @@ function new_compiler() {
 		# If we hadn't complied the kernel, this flag tells us we need to.
 		export NEW_COMPILER=true
 		logger "New clang version $AVAILABLE is available. Installing the new build chain first."
-		$EMERGE "sys-devel/clang" "sys-devel/lld" &>>"$LOGFILE"
+		$EMERGE "sys-devel/clang" "sys-devel/lld" "sys-devel/llvm-common" "sys-libs/llvm-libunwind" &>>"$LOGFILE"
 	else
 		logger "Current clang version $INSTALLED is up-to-date."
 	fi
@@ -162,8 +162,8 @@ function should_build_kernel() {
 	# This file is a 'cp' command that happens at the end of the compilation and installation.
 	# If the file is missing, then some error happened and we did not reach that point last time.
 	KERNEL_COMPILED="$(head /boot/config | grep "Kernel Configuration" | cut -d "-" -f 1 | cut -d " " -f 3)"
-	KERNEL_AVAILABLE="$(emerge -s sys-kernel/gentoo-source | grep "Latest version available" | awk '{print $NF}')"
-	KERNEL_EMERGED="$(emerge -s sys-kernel/gentoo-source | grep "Latest version installed" | awk '{print $NF}')"
+	KERNEL_AVAILABLE="$(emerge -s sys-kernel/vanilla-sources | grep "Latest version available" | awk '{print $NF}')"
+	KERNEL_EMERGED="$(emerge -s sys-kernel/vanilla-sources | grep "Latest version installed" | awk '{print $NF}')"
 
 	if [[ "$KERNEL_RUNNING" == "$KERNEL_COMPILED" ]]; then
 		logger "Current running kernel $KERNEL_RUNNING is the same as the compiled kernel $KERNEL_COMPILED."
@@ -225,12 +225,12 @@ esac
 
 # On new installments, we might be missing a few packages...
 # First, we need to make sure that we have a working repo tree
-if [ ! -d /var/db/repos/gentoo/sys-kernel/gentoo-sources ]; then
-	logger "The gentoo/sys-kernel/gentoo-sources folder is missing. Did you forget to do emerge-webrsync?"
+if [ ! -d /var/db/repos/gentoo/sys-kernel/vanilla-sources ]; then
+	logger "The gentoo/sys-kernel/vanilla-sources folder is missing. Did you forget to do emerge-webrsync?"
 	exit 1
 fi
 
-for pkg in "app-portage/gentoolkit" "sys-apps/mlocate" "dev-vcs/git" "sys-kernel/gentoo-sources"; do
+for pkg in "app-portage/gentoolkit" "sys-apps/mlocate" "dev-vcs/git" "sys-kernel/vanilla-sources"; do
 	if ! installed "$pkg"; then
 		logger "$pkg was not found on this system, installing it now."
 		$EMERGE "$pkg"

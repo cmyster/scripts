@@ -35,14 +35,14 @@ then
     mknod /dev/net/tun c 10 200
 fi
 
-openvpn --config tlv.conf --daemon
+openvpn --config tlv.conf --daemon --pull-filter ignore "route-ipv6" --pull-filter ignore "ifconfig-ipv6"
 echo "Waiting $SLEEP seconds to test connection."
 
-./bar_countdown.sh 20 $SLEEP "━" "┣" "┫"
+./bar_countdown.sh $SLEEP $SLEEP "━" "┣" "┫"
 
-if ifconfig redhat0 | grep UP &> /dev/null
+if ip -f inet addr show redhat0 | grep -q UP
 then
-    IP="$(ifconfig redhat0 | grep "inet " | awk '{print $2}' | cut -d "/" -f 1)"
+    IP=$(ip -f inet addr show redhat0 | grep "inet " | awk '{print $2}' | cut -d"/" -f 1)
     printf "\r\nup\nIP=%s\n" $IP
 else
     printf "\r\ndown\n"
