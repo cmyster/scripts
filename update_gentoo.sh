@@ -117,7 +117,20 @@ function new_compiler() {
 		# If we hadn't complied the kernel, this flag tells us we need to.
 		export NEW_COMPILER=true
 		logger "New clang version $AVAILABLE is available. Installing the new build chain first."
-		$EMERGE "sys-devel/clang" "sys-devel/lld" "sys-devel/llvm-common" "sys-libs/llvm-libunwind" &>>"$LOGFILE"
+		# Placeing the entire list is not needed. I'll try to remember fixing this next version release..
+		$EMERGE -1 \
+			"sys-libs/compiler-rt" \
+			"sys-libs/libcxxabi" \
+			"sys-libs/llvm-libunwind" \
+			"sys-libs/compiler-rt-sanitizers" \
+			"sys-libs/libcxx" \
+			"sys-libs/libomp" \
+			"sys-devel/lld" \
+			"sys-devel/llvm" \
+			"sys-devel/clang-common" \
+			"sys-devel/clang-runtime" \
+			"sys-devel/llvm-common" \
+			"sys-devel/clang" &>>"$LOGFILE"
 	else
 		logger "Current clang version $INSTALLED is up-to-date."
 	fi
@@ -230,7 +243,7 @@ if [ ! -d /var/db/repos/gentoo/sys-kernel/vanilla-sources ]; then
 	exit 1
 fi
 
-for pkg in "app-portage/gentoolkit" "sys-apps/mlocate" "dev-vcs/git" "sys-kernel/vanilla-sources"; do
+for pkg in "app-portage/gentoolkit" "sys-apps/mlocate" "dev-vcs/git" "sys-kernel/vanilla-sources" "sys-kernel/linux-firmware" "sys-kernel/linux-headers"; do
 	if ! installed "$pkg"; then
 		logger "$pkg was not found on this system, installing it now."
 		$EMERGE "$pkg"

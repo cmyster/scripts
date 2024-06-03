@@ -5,18 +5,17 @@ S_NAME="main"
 IS_SESSION="tmux ls | grep -q $S_NAME"
 
 if eval "$IS_SESSION"; then
-	printf "Session \"%s\" already exists.\n" "$S_NAME"
-	exit 1
+	tmux -2 a
+	exit 0
 fi
 
-if [ ! -d /tmp/tmux-999/ ]; then
-	mkdir /tmp/tmux-999
-	touch /tmp/tmux-999/default
+if [ ! -d /tmp/tmux-1000/ ]; then
+	mkdir /tmp/tmux-1000
+	touch /tmp/tmux-1000/default
 fi
 
-tmux new-session -d -s "$S_NAME" 2>/dev/null
-tmux new-window -t "$S_NAME"
-tmux new-window -t "$S_NAME"
-tmux send-keys -t "$S_NAME":1 "btop" Enter
-tmux send-keys -t "$S_NAME":2 "irssi" Enter
-tmux attach-session -t "$S_NAME"
+tmux -2 new-session -d -s "$S_NAME" 2>/dev/null
+tmux -2 new-window -t "$S_NAME"
+tmux -2 new-window -t "$S_NAME"
+tmux -2 send-keys -t "$S_NAME":1 "irssi" Enter
+tmux -2 attach-session -t "$S_NAME"
