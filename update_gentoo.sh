@@ -10,6 +10,7 @@ SECONDS=0
 CONF_PATH="/home/augol/gdrive/config/config_kernel"
 CP="$(which cp)"
 GREP="$(which grep)"
+COMPILER="gcc"
 
 ### SETUP
 
@@ -95,9 +96,9 @@ function new_portage() {
 }
 
 function new_kernel() {
-	if new_package "sys-kernel/vanilla-sources$"; then
+	if new_package "sys-kernel/gentoo-sources$"; then
 		logger "New kernel version $AVAILABLE is available. Emerging it now."
-		$EMERGE --oneshot "sys-kernel/vanilla-sources" &>>"$LOGFILE"
+		$EMERGE -1 --update sys-kernel/gentoo-sources &>>"$LOGFILE"
 		# At this point we expect that the most up-to-date folder is tne new linux source,
 		# so we can use ls's natural sorting to give us the very last (and latest) folder.
 		rm -rf /usr/src/linux
@@ -106,33 +107,16 @@ function new_kernel() {
 }
 
 function new_compiler() {
-	# Looking only for clang here because if it has newer version, the entire toolchain was updated.
-	# If lld is not in 'world' then after we clean the environment, it gets removed.
-	# If lld is in 'world' but we update only clang, emerge does not pick up lld's new version and
-	# creates a blocking update conflict.
-	# The solution here is to emerge both, so both are in 'world' and emerge would pick the entire chain,
-	# and nothing is removed at the end when cleaning up.
+	# If there is a new ${COMPILER} version, make sure it is updated and set the kernel to be next.
 	NEW_COMPILER=false
-	if new_package "sys-devel/clang$"; then
+	if new_package "sys-devel/${COMPILER}$"; then
 		# If we hadn't complied the kernel, this flag tells us we need to.
 		export NEW_COMPILER=true
-		logger "New clang version $AVAILABLE is available. Installing the new build chain first."
+		logger "New ${COMPILER} version $AVAILABLE is available. Installing the new build chain first."
 		# Placeing the entire list is not needed. I'll try to remember fixing this next version release..
-		$EMERGE -1 \
-			"sys-libs/compiler-rt" \
-			"sys-libs/libcxxabi" \
-			"sys-libs/llvm-libunwind" \
-			"sys-libs/compiler-rt-sanitizers" \
-			"sys-libs/libcxx" \
-			"sys-libs/libomp" \
-			"sys-devel/lld" \
-			"sys-devel/llvm" \
-			"sys-devel/clang-common" \
-			"sys-devel/clang-runtime" \
-			"sys-devel/llvm-common" \
-			"sys-devel/clang" &>>"$LOGFILE"
+		$EMERGE -1 --update sys-devel/${COMPILER} &>>"$LOGFILE"
 	else
-		logger "Current clang version $INSTALLED is up-to-date."
+		logger "Current ${COMPILER} version $INSTALLED is up-to-date."
 	fi
 }
 
@@ -142,11 +126,11 @@ function build_kernel() {
 	/usr/bin/make clean &>>"$LOGFILE"
 	/usr/bin/make mrproper &>>"$LOGFILE"
 	"$CP" "$CONF_PATH" .config
-	/usr/bin/make LLVM=1 LLVM_IAS=1 KCFLAGS="-O3 -march=native" olddefconfig &>>"$LOGFILE"
+	/usr/bin/make KCFLAGS="-O3 -march=native" olddefconfig &>>"$LOGFILE"
 
 	logger "Compiling and installing a new kernel image."
 
-	/usr/bin/make -j$(($(nproc) - 2)) LLVM=1 LLVM_IAS=1 KCFLAGS="-O3 -march=native" 1>/dev/null
+	/usr/bin/make -j$(($(nproc) - 2)) KCFLAGS="-O3 -march=native" 1>/dev/null
 	/usr/bin/make modules_install 1>/dev/null
 	rm -rf /boot/{vmlinuz,System.map,config}
 	/usr/bin/make install &>/dev/null
@@ -175,8 +159,8 @@ function should_build_kernel() {
 	# This file is a 'cp' command that happens at the end of the compilation and installation.
 	# If the file is missing, then some error happened and we did not reach that point last time.
 	KERNEL_COMPILED="$(head /boot/config | grep "Kernel Configuration" | cut -d "-" -f 1 | cut -d " " -f 3)"
-	KERNEL_AVAILABLE="$(emerge -s sys-kernel/vanilla-sources | grep "Latest version available" | awk '{print $NF}')"
-	KERNEL_EMERGED="$(emerge -s sys-kernel/vanilla-sources | grep "Latest version installed" | awk '{print $NF}')"
+	KERNEL_AVAILABLE="$(emerge -s sys-kernel/gentoo-sources | grep "Latest version available" | awk '{print $NF}')"
+	KERNEL_EMERGED="$(emerge -s sys-kernel/gentoo-sources | grep "Latest version installed" | awk '{print $NF}')"
 
 	if [[ "$KERNEL_RUNNING" == "$KERNEL_COMPILED" ]]; then
 		logger "Current running kernel $KERNEL_RUNNING is the same as the compiled kernel $KERNEL_COMPILED."
@@ -238,12 +222,12 @@ esac
 
 # On new installments, we might be missing a few packages...
 # First, we need to make sure that we have a working repo tree
-if [ ! -d /var/db/repos/gentoo/sys-kernel/vanilla-sources ]; then
-	logger "The gentoo/sys-kernel/vanilla-sources folder is missing. Did you forget to do emerge-webrsync?"
-	exit 1
+if [ ! -d /var/db/repos/gentoo/sys-kernel/gentoo-sources ]; then
+	logger "The repos/gentoo/sys-kernel/gentoo-sources folder is missing. Did you forget to do emerge-webrsync?"
+	emerge-webrsync
 fi
 
-for pkg in "app-portage/gentoolkit" "sys-apps/mlocate" "dev-vcs/git" "sys-kernel/vanilla-sources" "sys-kernel/linux-firmware" "sys-kernel/linux-headers"; do
+for pkg in "app-portage/gentoolkit" "sys-apps/mlocate" "dev-vcs/git" "sys-kernel/gentoo-sources" "sys-kernel/linux-firmware" "sys-kernel/linux-headers"; do
 	if ! installed "$pkg"; then
 		logger "$pkg was not found on this system, installing it now."
 		$EMERGE "$pkg"
@@ -301,7 +285,11 @@ if $UPDT; then
 	# Running emerge update @world twice takes time, but it prints everything to build in order, which is nice for logging.
 	logger "Refreshing @world"
 	$EMERGE --update --deep --changed-use --newuse --tree --ask --pretend @world
-	$EMERGE --update --deep --changed-use --newuse --with-bdeps=y --keep-going --tree --backtrack=15 @world &>>"$LOGFILE" &
+	$EMERGE --update --deep --changed-use --newuse --with-bdeps=y --keep-going --tree --backtrack=15 @world &>>"$LOGFILE" & disown
+
+	# At this point, we might have already compiled a few things so the counter needsto be rest.
+	# Since we count with "Emerging", we need to change those lines now.
+	sed -i 's/Emerging/emerging/g' "$LOGFILE"
 
 	while emerging; do
 		BUILDING=$($GREP "Emerging (" "$LOGFILE" | tail -n 1)
