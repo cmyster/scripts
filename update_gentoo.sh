@@ -1,5 +1,4 @@
 #!/bin/bash
-# set -x
 #
 ### PARAMETERS
 LOGDIR="/tmp/update"
@@ -7,10 +6,11 @@ TIME="$(date +%Hh%Mm%Ss)"
 LOGFILE=$LOGDIR/update_"$TIME"_log
 EMERGE="/usr/bin/emerge --color n --nospinner"
 SECONDS=0
-CONF_PATH="/home/augol/gdrive/config/config_kernel"
+CONF_PATH="/home/cmyster/gdrive/config/config_kernel"
 CP="$(which cp)"
 GREP="$(which grep)"
 COMPILER="gcc"
+KERNEL_SRC="sys-kernel/gentoo-sources"
 
 ### SETUP
 
@@ -39,7 +39,7 @@ function logger() {
 function installed() {
 	# Checking if a package is installed.
 	# Gets a package atom, returns an int bool.
-	if emerge -s "$1\$" | $GREP "Not Installed" &>/dev/null; then
+	if emerge -s "{$1}\$" | $GREP "Not Installed" &>/dev/null; then
 		return 1
 	else
 		return 0
@@ -49,7 +49,7 @@ function installed() {
 function new_package() {
 	# Check if there is a newer package.
 	# Gets a package atom, returns an int bool.
-	$EMERGE -s "$1" &>"$LOGDIR"/new_package
+	$EMERGE -s "$1$" &>"$LOGDIR"/new_package
 	INSTALLED=$($GREP "installed" "$LOGDIR"/new_package | awk '{print $NF}')
 	AVAILABLE=$($GREP "available" "$LOGDIR"/new_package | awk '{print $NF}')
 	export INSTALLED
@@ -87,7 +87,7 @@ function new_portage() {
 	for pkg in "app-portage/gentoolkit" "sys-apps/portage"; do
 		if new_package "$pkg"; then
 			logger "New $pkg version $AVAILABLE is available. Installing."
-			$EMERGE --oneshot "$pkg" &>>"$LOGFILE"
+			$EMERGE --oneshot --update "$pkg" &>>"$LOGFILE"
 			tail "$LOGFILE"
 		else
 			logger "Installed $pkg version $INSTALLED is up-to-date."
@@ -96,41 +96,46 @@ function new_portage() {
 }
 
 function new_kernel() {
-	if new_package "sys-kernel/gentoo-sources$"; then
+	if new_package "$KERNEL_SRC"; then
 		logger "New kernel version $AVAILABLE is available. Emerging it now."
-		$EMERGE -1 --update sys-kernel/gentoo-sources &>>"$LOGFILE"
-		# At this point we expect that the most up-to-date folder is tne new linux source,
-		# so we can use ls's natural sorting to give us the very last (and latest) folder.
-		rm -rf /usr/src/linux
-		ln -s /usr/src/$(ls -1 /usr/src | grep linux | sort | tail -n 1) /usr/src/linux
+		rm -rf /usr/src/linux*
+		$EMERGE --oneshot --update "$KERNEL_SRC" &>>"$LOGFILE"
+		# At this point we expect that the latest folder is the new linux source.
+		ln -s "/usr/src/$(ls -1 /usr/src | grep linux | sort | tail -n 1)" /usr/src/linux
 	fi
 }
 
 function new_compiler() {
-	# If there is a new ${COMPILER} version, make sure it is updated and set the kernel to be next.
+	# If there is a new ${COMPILER} version, make sure it is updated and set the kernel to be the next to build.
 	NEW_COMPILER=false
-	if new_package "sys-devel/${COMPILER}$"; then
-		# If we hadn't complied the kernel, this flag tells us we need to.
+	if new_package "sys-devel/$COMPILER"; then
+		# Setting this flag to indicate that we need to rebuild the kernel.
 		export NEW_COMPILER=true
-		logger "New ${COMPILER} version $AVAILABLE is available. Installing the new build chain first."
-		# Placeing the entire list is not needed. I'll try to remember fixing this next version release..
-		$EMERGE -1 --update sys-devel/${COMPILER} &>>"$LOGFILE"
+		logger "New ${COMPILER} version $AVAILABLE is available. Installing it first."
+		$EMERGE --oneshot --update sys-devel/${COMPILER} &>>"$LOGFILE"
 	else
 		logger "Current ${COMPILER} version $INSTALLED is up-to-date."
 	fi
 }
 
 function build_kernel() {
+    if [ ! -d "/usr/src/linux-*" ]
+	then
+		rm -rf /usr/src/linux*
+		logger "Emerging $KERNEL_SRC"
+		$EMERGE --oneshot "$KERNEL_SRC" &>>"$LOGFILE"
+		ln -s "/usr/src/$(ls -1 /usr/src | grep linux | sort | tail -n 1)" /usr/src/linux
+	fi
 	logger "Cleaning environment before compiling a new kernel image."
 	cd /usr/src/linux
 	/usr/bin/make clean &>>"$LOGFILE"
 	/usr/bin/make mrproper &>>"$LOGFILE"
 	"$CP" "$CONF_PATH" .config
-	/usr/bin/make KCFLAGS="-O3 -march=native" olddefconfig &>>"$LOGFILE"
+	/usr/bin/make olddefconfig &>>"$LOGFILE"
 
 	logger "Compiling and installing a new kernel image."
 
-	/usr/bin/make -j$(($(nproc) - 2)) KCFLAGS="-O3 -march=native" 1>/dev/null
+	/usr/bin/make -j$(($(nproc) - 2)) KCFLAGS="-march=native" 1>/dev/null
 	/usr/bin/make modules_install 1>/dev/null
 	rm -rf /boot/{vmlinuz,System.map,config}
 	/usr/bin/make install &>/dev/null
@@ -149,7 +154,7 @@ function build_kernel() {
 	# Lasly, we want to make sure that the 'linux' symlink is pointing to the correct folder.
 	# This can happen sometimes if there was an issue.
 	if ! readlink /usr/src/linux &>/dev/null; then
-		ln -s /usr/src/$(ls -1 /usr/src | grep linux | sort | tail -n 1) /usr/src/linux
+		ln -s "/usr/src/$(ls -1 /usr/src | grep linux | sort | tail -n 1)" /usr/src/linux
 	fi
 }
 
@@ -158,9 +163,9 @@ function should_build_kernel() {
 	# The way that this script works, /boot/config exists and is updated with the lastest image.
 	# This file is a 'cp' command that happens at the end of the compilation and installation.
 	# If the file is missing, then some error happened and we did not reach that point last time.
-	KERNEL_COMPILED="$(head /boot/config | grep "Kernel Configuration" | cut -d "-" -f 1 | cut -d " " -f 3)"
-	KERNEL_AVAILABLE="$(emerge -s sys-kernel/gentoo-sources | grep "Latest version available" | awk '{print $NF}')"
-	KERNEL_EMERGED="$(emerge -s sys-kernel/gentoo-sources | grep "Latest version installed" | awk '{print $NF}')"
+	KERNEL_COMPILED="$(head /efi/config | grep "Kernel Configuration" | cut -d "-" -f 1 | cut -d " " -f 3)"
+	KERNEL_AVAILABLE="$($EMERGE -s "$KERNEL_SRC$" | grep "Latest version available" | awk '{print $NF}')"
+	KERNEL_EMERGED="$($EMERGE -s "$KERNEL_SRC$" | grep "Latest version installed" | awk '{print $NF}')"
 
 	if [[ "$KERNEL_RUNNING" == "$KERNEL_COMPILED" ]]; then
 		logger "Current running kernel $KERNEL_RUNNING is the same as the compiled kernel $KERNEL_COMPILED."
@@ -173,19 +178,16 @@ function should_build_kernel() {
 	if [[ "$KERNEL_EMERGED" != "$KERNEL_AVAILABLE" ]]; then
 		logger "Current kernel $KERNEL_EMERGED will be replaced by $KERNEL_AVAILABLE"
 		build_kernel
-		return 0
 	fi
 
 	if [[ "$KERNEL_COMPILED" != "$KERNEL_AVAILABLE" ]]; then
 		logger "Current kernel $KERNEL_COMPILED will be replaced by $KERNEL_AVAILABLE"
 		build_kernel
-		return 0
 	fi
 
 	if $NEW_COMPILER; then
 		logger "New compiler installed, rebuilding the kernel"
 		build_kernel
-		return 0
 	fi
 }
 
@@ -221,13 +223,13 @@ esac
 . /etc/profile
 
 # On new installments, we might be missing a few packages...
-# First, we need to make sure that we have a working repo tree
-if [ ! -d /var/db/repos/gentoo/sys-kernel/gentoo-sources ]; then
-	logger "The repos/gentoo/sys-kernel/gentoo-sources folder is missing. Did you forget to do emerge-webrsync?"
+# First, we need to make sure that we have a working repo tree.
+if [ ! -d "/var/db/repos/gentoo/$KERNEL_SRC" ]; then
+	logger "The repos/gentoo/$KERNEL_SRC folder is missing. Did you forget to do emerge-webrsync?"
 	emerge-webrsync
 fi
 
-for pkg in "app-portage/gentoolkit" "sys-apps/mlocate" "dev-vcs/git" "sys-kernel/gentoo-sources" "sys-kernel/linux-firmware" "sys-kernel/linux-headers"; do
+for pkg in "app-portage/gentoolkit" "sys-apps/mlocate" "dev-vcs/git" "$KERNEL_SRC" "sys-kernel/linux-firmware" "sys-kernel/linux-headers"; do
 	if ! installed "$pkg"; then
 		logger "$pkg was not found on this system, installing it now."
 		$EMERGE "$pkg"
@@ -235,8 +237,11 @@ for pkg in "app-portage/gentoolkit" "sys-apps/mlocate" "dev-vcs/git" "sys-kernel
 done
 
 # If this is a new system, /usr/src/linux needs to point to the correct folder
-if [ ! -L /usr/src/linux ]; then
-	ln -s "$(ls -1 /usr/src | grep linux | sort | tail -n 1)" "/usr/src/linux"
+# (assuming that the kernel source is inmstalled at this point).
+if [ -d "/usr/src/linux-*" ]; then
+	if [ ! -L /usr/src/linux ]; then
+		ln -s "$(ls -1 /usr/src | grep linux | sort | tail -n 1)" "/usr/src/linux"
+	fi
 fi
 
 if $SYNC; then
@@ -261,9 +266,9 @@ if $UPDT; then
 	# After that, oneshot portage.
 	new_portage
 
-	# The following steps will make sure that prior to updating @world, the compiler and kernel are the most up-to-date:
+	# The following steps will make sure that prior to updating @world, the compiler and kernel are up-to-date:
 
-	# 1. If there is a new compiler, we start from it.
+	# 1. If there is a new compiler, we start from that.
 	new_compiler
 
 	# 2. If there is a new kernel version, we want to get it regardless if there was a new compiler or not.
@@ -289,7 +294,7 @@ if $UPDT; then
 
 	# At this point, we might have already compiled a few things so the counter needsto be rest.
 	# Since we count with "Emerging", we need to change those lines now.
-	sed -i 's/Emerging/emerging/g' "$LOGFILE"
+	# sed -i 's/Emerging/emerging/g' "$LOGFILE" < this breaks logging to screen.
 
 	while emerging; do
 		BUILDING=$($GREP "Emerging (" "$LOGFILE" | tail -n 1)
