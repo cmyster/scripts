@@ -10,5 +10,4 @@ echo "${BASE_URL}/${IMG}.jpg"
 wget "${BASE_URL}/${IMG}.jpg"
 $HOME/git/upscayl-ncnn/build/upscayl-bin -i "${DIR}/${IMG}.jpg" -o "${DIR}/${IMG}.png" -m /usr/share/realesrgan-ncnn-vulkan/models
 mv "${IMG}.png" "pic_of_day.png"
-rm -f "${IMG}.jpg"
-rm -f *.log
+rm -rf wget-log "${IMG}.jpg"

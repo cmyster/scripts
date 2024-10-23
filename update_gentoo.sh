@@ -198,6 +198,7 @@ function should_build_kernel() {
 SYNC=false
 UPDT=false
 RBLD=false
+IGNR=false
 
 case $@ in
 -s)
@@ -213,8 +214,11 @@ case $@ in
 	SYNC=true
 	UPDT=true
 	;;
+-i)
+	IGNR=true
+	;;
 *)
-	printf "use %s -s to sync, -u to update, -k to rebuild an existing kernel,\n or -f to do all.\n" "$0"
+	printf "use %s -s to sync, -u to update, -k to rebuild an existing kernel, -i to skip --depclean,\n or -f to do all.\n" "$0"
 	exit 0
 	;;
 esac
@@ -306,8 +310,11 @@ if $UPDT; then
 		sleep 2
 	done
 
-	logger "Removing obsolete packages."
-	$EMERGE --depclean
+#    if $IGNR
+#    then
+        #logger "Removing obsolete packages."
+	    #$EMERGE --depclean
+#    fi
 
 	logger "Rebuilding preserved packages where needed."
 	$EMERGE @preserved-rebuild &>>"$LOGFILE"

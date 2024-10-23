@@ -3,5 +3,6 @@ if ! pgrep -f "dbus-run-session startplasma-wayland" &> /dev/null
 then
   ~/scripts/myip.sh &> /dev/null & disown
   ~/scripts/pic_of_day.sh &> /dev/null & disown
-  dbus-run-session startplasma-wayland & disown &> logs/plasma-wayland.log
+  # dbus-run-session startplasma-wayland & disown &> logs/plasma-wayland.log
+  dbus-run-session Hyprland &> ~/logs/hyprland.log & disown
 fi
