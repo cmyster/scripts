@@ -291,14 +291,16 @@ if $UPDT; then
 
 	### EMERGE UPDATE @WORLD
 
+	# Before we start, there could be instances of packages that needed to be updated beforehand. This would be indicated in the log,
+    # as emerging a single package adds a line with "Emerging (1 of 1)...". If we want to later show a status of M out of N packages
+    # that are being merged, we would like to start with no Emerging in the log.
+	
+	sed -i '/Emerging/d' "$LOGFILE"
+
 	# Running emerge update @world twice takes time, but it prints everything to build in order, which is nice for logging.
 	logger "Refreshing @world"
-	$EMERGE --update --deep --changed-use --newuse --tree --ask --pretend @world
-	$EMERGE --update --deep --changed-use --newuse --with-bdeps=y --keep-going --tree --backtrack=15 @world &>>"$LOGFILE" & disown
-
-	# At this point, we might have already compiled a few things so the counter needsto be rest.
-	# Since we count with "Emerging", we need to change those lines now.
-	# sed -i 's/Emerging/emerging/g' "$LOGFILE" < this breaks logging to screen.
+	$EMERGE --update --deep --changed-use --newuse --tree --ask --pretend --exclude=gui-libs/xdg-desktop-portal-hyprland @world
+	$EMERGE --update --deep --changed-use --newuse --with-bdeps=y --keep-going --tree --backtrack=50 --exclude=gui-libs/xdg-desktop-portal-hyprland @world &>>"$LOGFILE" & disown
 
 	while emerging; do
 		BUILDING=$($GREP "Emerging (" "$LOGFILE" | tail -n 1)

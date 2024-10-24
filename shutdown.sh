@@ -1,17 +1,13 @@
 #!/bin/bash
+set -x
+LOCK_FILE="/tmp/user_shutdown_script"
 
-CANCEL=false
-if [[ "$1" == "c" ]]
+if [ -z "$1" ] || [ -z "$2" ]
 then
-    CANCEL=true
+    exit 1
 fi
 
-if $CANCEL
-then
-    notify-send -u normal "Shutdown aborted"
-else
-    play -q /usr/share/sounds/freedesktop/stereo/service-logout.oga & disown
-    notify-send -u critical "System shutdown in $1 seconds!"
-    sleep $1 && shutdown -P now
-fi
+sleep $2
 
+rm -rf $LOCK_FILE
+echo shutdown "-${1}" now
